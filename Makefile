@@ -1,31 +1,35 @@
-ROOT_DIR     := $(shell pwd)
-OUTPUT_DIR   := $(ROOT_DIR)/_output
-BIN_DIR      := $(OUTPUT_DIR)/bin
-CLUSTER_NAME := spire-cluster
+ROOT_DIR          := $(shell pwd)
+OUTPUT_DIR        := $(ROOT_DIR)/_output
+BIN_DIR           := $(OUTPUT_DIR)/.bin
+CLUSTER_BASE_NAME := istio-cluster
 
 .PHONY: install
-install: setup-test-cluster install-spire install-istio
+install: setup-test-clusters install-istio
 
 # Kind clusters
-.PHONY: setup-test-cluster
-setup-test-cluster:
-	BIN_DIR=$(BIN_DIR) ./scripts/lib/kind.sh kind_create_cluster "$(CLUSTER_NAME)"
+.PHONY: setup-test-clusters
+setup-test-clusters:
+	BIN_DIR=$(BIN_DIR) . ./scripts/lib/kind.sh; \
+	kind_create_clusters "$(CLUSTER_BASE_NAME)-1 $(CLUSTER_BASE_NAME)-2"
 
-.PHONY: destroy-test-cluster
-destroy-test-cluster:
-	BIN_DIR=$(BIN_DIR) ./scripts/lib/kind.sh kind_delete_cluster "$(CLUSTER_NAME)"
-
-# Install Spire stack
-.PHONY: install-spire
-install-spire:
-	./scripts/lib/spire.sh spire_install "kind-$(CLUSTER_NAME)"
+.PHONY: cleanup-test-clusters
+cleanup-test-clusters:
+	BIN_DIR=$(BIN_DIR) . ./scripts/lib/kind.sh; \
+	kind_delete_clusters "$(CLUSTER_BASE_NAME)-1 $(CLUSTER_BASE_NAME)-2"
 
 # Install Istio
 .PHONY: install-istio
 install-istio:
-	./scripts/lib/istio.sh istio_install "kind-$(CLUSTER_NAME)"
+	BIN_DIR=$(BIN_DIR) . ./scripts/lib/istio.sh; \
+	istio_install "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2"
+
+# Install Spire stack
+.PHONY: install-spire
+install-spire:
+	BIN_DIR=$(BIN_DIR) . ./scripts/lib/spire.sh; \
+	spire_install "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2"
 
 # Clean up
 .PHONY: clean
-clean: destroy-test-cluster
+clean: cleanup-test-clusters
 	rm -rf $(BIN_DIR)/*
