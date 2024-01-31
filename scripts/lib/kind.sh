@@ -14,13 +14,15 @@ kind_install_cli() {
   ARCH="$(uname -m)"
   if [ "$ARCH" = "x86_64" ]; then
     export ARCH="amd64"
-  elif [ "$ARCH" = "aarch64" ]; then
+    export OS="linux"
+  elif [ "$ARCH" = "arm64" ]; then
     export ARCH="arm64"
+    export OS="darwin"
   fi
 
   mkdir -p "${BIN_DIR}"
   curl -L -s -o "${KIND_CLI}" \
-    "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-${ARCH}"
+    "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-${OS}-${ARCH}"
   chmod +x "${KIND_CLI}"
 }
 

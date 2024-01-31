@@ -17,7 +17,7 @@ istio_install_cli() {
   ARCH="$(uname -m)"
   if [ "$ARCH" = "x86_64" ]; then
     export ARCH="linux-amd64"
-  elif [ "$ARCH" = "aarch64" ]; then
+  elif [ "$ARCH" = "arm64" ]; then
     export ARCH="osx-arm64"
   fi
 
@@ -25,23 +25,34 @@ istio_install_cli() {
   curl -L -s \
     "https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istioctl-${ISTIO_VERSION}-${ARCH}.tar.gz" | tar -xvz -C "${BIN_DIR}"
   chmod +x "${ISTIO_CLI}"
+  export PATH=${BIN_DIR}:$PATH
 }
 
 istio_install() {
   istio_install_cli
 
-  clusters_context="$*"
+  # Define clusters_contexts as an array from the input arguments
+  clusters_contexts=("$@")
   cluster_counter=0
-  for context in ${clusters_context}; do
-    echo "installing istio in ${context} cluster"
+
+  for context in "${clusters_contexts[@]}"; do
+    echo "Installing Istio in ${context} cluster"
     istio_install_control_plane "${context}"
     istio_install_gateway "${cluster_counter}" "${context}"
     cluster_counter=$((cluster_counter + 1))
   done
+
+  # Call istio_enable_endpoint_discovery with the first two contexts
+  if [ "${#clusters_contexts[@]}" -eq 2 ]; then
+    istio_enable_endpoint_discovery "${clusters_contexts[0]}" "${clusters_contexts[1]}"
+  else
+    echo "Error: istio_enable_endpoint_discovery requires exactly two contexts."
+  fi
 }
 
 istio_install_control_plane() {
   context="${1}"
+
   kubectl create --context="${context}" namespace "${ISTIO_NAMESPACE}" || true
 
   # Install Istio control plane
@@ -61,6 +72,10 @@ spec:
     global:
       defaultPodDisruptionBudget:
         enabled: false
+      meshID: mesh1
+      multiCluster:
+        clusterName: ${context} 
+      network: network1
     pilot:
       autoscaleEnabled: false
 EOF
@@ -131,4 +146,21 @@ spec:
         autoscaleEnabled: false
         injectionTemplate: gateway
 EOF
+}
+
+istio_enable_endpoint_discovery () {
+  contexts=("$@")
+  num_contexts=${#contexts[@]}
+
+  for i in $(seq 0 $((num_contexts - 1))); do
+    current_context="${contexts[i]}"
+    target_context="${contexts[$(( (i + 1) % num_contexts ))]}"
+
+    echo "Creating remote secret from ${current_context} and applying it to ${target_context}"
+
+    istioctl create-remote-secret \
+      --context="${current_context}" \
+      --name="${current_context}" | \
+      kubectl apply -f - --context="${target_context}"
+  done
 }
