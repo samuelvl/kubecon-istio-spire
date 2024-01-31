@@ -1,96 +1,72 @@
 #!/bin/sh
 set -o nounset
 
+. "./scripts/lib/istio.sh"
+
 BIN_DIR=${BIN_DIR:-.}
 KIND_CLI="${BIN_DIR}/kind"
 KIND_VERSION="0.20.0"
+KIND_NODE_IMAGE="docker.io/kindest/node:v1.27.3@sha256:3966ac761ae0136263ffdb6cfd4db23ef8a83cba8a463690e98317add2c9ba72"
 
 kind_install_cli() {
-  echo "Please specify your operating system (linux/mac):"
-  read os_choice
-
   echo "Downloading kind cli tool to ${BIN_DIR} output folder"
 
-  case $os_choice in
-    linux)
-      curl -L -s -o "${KIND_CLI}" \
-        https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-amd64
-      ;;
-    mac)
-      curl -L -s -o "${KIND_CLI}" \
-        https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-darwin-arm64
-      ;;
-    *)
-      echo "Invalid input. Please specify 'linux' or 'mac'."
-      return 1
-      ;;
-  esac
+  ARCH="$(uname -m)"
+  if [ "$ARCH" = "x86_64" ]; then
+    export ARCH="amd64"
+  elif [ "$ARCH" = "aarch64" ]; then
+    export ARCH="arm64"
+  fi
 
+  mkdir -p "${BIN_DIR}"
+  curl -L -s -o "${KIND_CLI}" \
+    "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-${ARCH}"
   chmod +x "${KIND_CLI}"
 }
 
-kind_create_cluster() {
-  # Base port numbers
-  base_control_plane_port=31080
-  base_https_port=31443
-  base_another_port=31445
-
-  # Increment to ensure unique port numbers for each cluster
-  increment=1000
-
+kind_create_clusters() {
   kind_install_cli
 
-  for cluster_name in "$@"; do
-    echo "Creating cluster: $cluster_name"
+  clusters="$*"
+  cluster_counter=0
+  for cluster_name in ${clusters}; do
+    if kind_cluster_exists "${cluster_name}"; then
+      echo "Kind cluster \"${cluster_name}\" already exists"
+      continue
+    fi
 
     # Calculate unique port numbers for this cluster
-    control_plane_port=$((base_control_plane_port + increment))
-    https_port=$((base_https_port + increment))
-    another_port=$((base_another_port + increment))
-
-    ${KIND_CLI} get clusters | grep "${cluster_name}" >/dev/null && {
-      echo "Kind cluster \"${cluster_name}\" already exists"
-      return
-    } || true
+    port_offset=$((cluster_counter * ISTIO_PORT_OFFSET))
+    istio_gw_port_http=$((ISTIO_GW_BASE_PORT_HTTP + port_offset))
+    istio_gw_port_https=$((ISTIO_GW_BASE_PORT_HTTPS + port_offset))
 
     cat <<EOF | ${KIND_CLI} create cluster --name "${cluster_name}" --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
 - role: control-plane
-  image: docker.io/kindest/node:v1.27.3@sha256:3966ac761ae0136263ffdb6cfd4db23ef8a83cba8a463690e98317add2c9ba72
+  image: ${KIND_NODE_IMAGE}
   extraPortMappings:
     - containerPort: 31080
-      hostPort: ${control_plane_port}
+      hostPort: ${istio_gw_port_http}
       protocol: TCP
     - containerPort: 31443
-      hostPort: ${https_port}
+      hostPort: ${istio_gw_port_https}
       protocol: TCP
-    - containerPort: 31445
-      hostPort: ${another_port}
-      protocol: TCP
-- role: worker
-  image: docker.io/kindest/node:v1.27.3@sha256:3966ac761ae0136263ffdb6cfd4db23ef8a83cba8a463690e98317add2c9ba72
-- role: worker
-  image: docker.io/kindest/node:v1.27.3@sha256:3966ac761ae0136263ffdb6cfd4db23ef8a83cba8a463690e98317add2c9ba72
 EOF
-
-    # Increment the base port numbers for the next cluster
-    base_control_plane_port=$((base_control_plane_port + increment))
-    base_https_port=$((base_https_port + increment))
-    base_another_port=$((base_another_port + increment))
+    cluster_counter=$((cluster_counter + 1))
   done
 }
 
-
-kind_delete_cluster() {
-  for cluster_name in "$@"; do
-    echo "Deleting cluster: $cluster_name"
-
-    ${KIND_CLI} get clusters | grep "${cluster_name}" >/dev/null && {
+kind_delete_clusters() {
+  clusters="$*"
+  for cluster_name in ${clusters}; do
+    if kind_cluster_exists "${cluster_name}"; then
       ${KIND_CLI} delete clusters "${cluster_name}"
-    } || true
+    fi
   done
 }
 
-"$@"
+kind_cluster_exists() {
+  ${KIND_CLI} get clusters | grep "${cluster_name}" >/dev/null
+}
