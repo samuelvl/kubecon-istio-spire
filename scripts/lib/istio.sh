@@ -6,6 +6,8 @@ export ISTIO_GW_NAMESPACE="istio-gateways"
 export ISTIO_GW_BASE_PORT_HTTP=31080
 export ISTIO_GW_BASE_PORT_HTTPS=31443
 export ISTIO_PORT_OFFSET=1000
+export MESHID=mesh1
+export NETWORK=network1
 
 BIN_DIR=${BIN_DIR:-.}
 ISTIO_CLI="${BIN_DIR}/istioctl"
@@ -30,24 +32,41 @@ istio_install_cli() {
 
 istio_install() {
   istio_install_cli
-
-  # Define clusters_contexts as an array from the input arguments
   clusters_contexts=("$@")
-  cluster_counter=0
 
+  namespace="sample"
+  versions=("v1" "v2")
+
+  cluster_counter=0
   for context in "${clusters_contexts[@]}"; do
-    echo "Installing Istio in ${context} cluster"
+    echo "installing istio in ${context} cluster"
     istio_install_control_plane "${context}"
     istio_install_gateway "${cluster_counter}" "${context}"
+    # Deploy HelloWorld app with the corresponding version
+    version="${versions[cluster_counter]:-}"
+    echo "Deploying HelloWorld ${version} in ${context}"
+    deploy_helloworld "${context}" "${namespace}" "${version}"
+    echo "Deploying Sleep app in ${context}"
+    deploy_sleep "${context}" "${namespace}"
     cluster_counter=$((cluster_counter + 1))
   done
 
-  # Call istio_enable_endpoint_discovery with the first two contexts
-  if [ "${#clusters_contexts[@]}" -eq 2 ]; then
-    istio_enable_endpoint_discovery "${clusters_contexts[0]}" "${clusters_contexts[1]}"
-  else
-    echo "Error: istio_enable_endpoint_discovery requires exactly two contexts."
+}
+
+istio_install_cli (){
+  echo "Downloading istioctl tool to ${BIN_DIR} output folder"
+
+  ARCH="$(uname -m)"
+  if [ "$ARCH" = "x86_64" ]; then
+    export ARCH="linux-amd64"
+  elif [ "$ARCH" = "arm64" ]; then
+    export ARCH="osx-arm64"
   fi
+
+  mkdir -p "${BIN_DIR}"
+  curl -L -s \
+    "https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istioctl-${ISTIO_VERSION}-${ARCH}.tar.gz" | tar -xvz -C "${BIN_DIR}"
+  chmod +x "${ISTIO_CLI}"
 }
 
 istio_install_control_plane() {
@@ -72,10 +91,10 @@ spec:
     global:
       defaultPodDisruptionBudget:
         enabled: false
-      meshID: mesh1
+      meshID: ${MESHID}
       multiCluster:
         clusterName: ${context} 
-      network: network1
+      network: ${NETWORK}
     pilot:
       autoscaleEnabled: false
 EOF
@@ -148,8 +167,8 @@ spec:
 EOF
 }
 
-istio_enable_endpoint_discovery () {
-  contexts=("$@")
+istio_enable_endpoint_discovery() {
+  contexts=("$*")
   num_contexts=${#contexts[@]}
 
   for i in $(seq 0 $((num_contexts - 1))); do
@@ -163,4 +182,47 @@ istio_enable_endpoint_discovery () {
       --name="${current_context}" | \
       kubectl apply -f - --context="${target_context}"
   done
+}
+
+deploy_helloworld() {
+  context="$1"
+  namespace="$2"
+  version="$3"
+
+  # Define the HelloWorld service YAML
+  helloworld_service_yaml=$(cat <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: helloworld
+  namespace: ${namespace}
+spec:
+  ports:
+  - name: http
+    port: 5000
+  selector:
+    app: helloworld
+EOF
+  )
+
+  # Create namespace and label it for Istio sidecar injection
+  kubectl create --context="${context}" namespace "${namespace}" || true
+  kubectl label --context="${context}" namespace "${namespace}" istio-injection=enabled --overwrite
+
+  # Apply the HelloWorld service YAML
+  echo "$helloworld_service_yaml" | kubectl apply --context="${context}" -f -
+  echo "version: ${version}"
+  echo "context ${context}"
+  # Deploy HelloWorld app
+  kubectl apply --context="${context}" -n "${namespace}" -f \
+    "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/helloworld/helloworld.yaml" \
+    -l app=helloworld -l version=${version}
+}
+
+deploy_sleep() {
+  context="$1"
+  namespace="$2"
+
+  kubectl apply --context="${context}" -n "${namespace}" -f \
+    "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/sleep/sleep.yaml"
 }

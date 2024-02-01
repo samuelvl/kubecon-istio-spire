@@ -29,12 +29,6 @@ install-spire:
 	BIN_DIR=$(BIN_DIR) . ./scripts/lib/spire.sh; \
 	spire_install "kind-$(CLUSTER_BASE_NAME)-1" "kind-$(CLUSTER_BASE_NAME)-2"
 
-# Install sample apps
-.PHONY: deploy-apps
-deploy-apps:
-	BIN_DIR=$(BIN_DIR) . ./scripts/lib/app.sh; \
-	deploy_hello_world_and_sleep_apps "kind-$(CLUSTER_BASE_NAME)-1" "kind-$(CLUSTER_BASE_NAME)-2"
-
 # Clean up
 .PHONY: clean
 clean: cleanup-test-clusters
