@@ -28,9 +28,9 @@ istio_install() {
     # Deploy HelloWorld app with the corresponding version
     version="${versions[cluster_counter]:-}"
     echo "Deploying HelloWorld ${version} in ${context}"
-    deploy_helloworld "${context}" "${namespace}" "${version}"
+    istio_deploy_app_helloworld "${context}" "${namespace}" "${version}"
     echo "Deploying Sleep app in ${context}"
-    deploy_sleep "${context}" "${namespace}"
+    istio_deploy_app_sleep "${context}" "${namespace}"
     cluster_counter=$((cluster_counter + 1))
   done
 
