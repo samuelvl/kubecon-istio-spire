@@ -6,29 +6,12 @@ export ISTIO_GW_NAMESPACE="istio-gateways"
 export ISTIO_GW_BASE_PORT_HTTP=31080
 export ISTIO_GW_BASE_PORT_HTTPS=31443
 export ISTIO_PORT_OFFSET=1000
-export MESHID=mesh1
-export NETWORK=network1
+export ISTIO_MESHID=mesh1
+export ISTIO_NETWORK=network1
 
 BIN_DIR=${BIN_DIR:-.}
 ISTIO_CLI="${BIN_DIR}/istioctl"
 ISTIO_VERSION="1.20.2"
-
-istio_install_cli() {
-  echo "Downloading istioctl tool to ${BIN_DIR} output folder"
-
-  ARCH="$(uname -m)"
-  if [ "$ARCH" = "x86_64" ]; then
-    export ARCH="linux-amd64"
-  elif [ "$ARCH" = "arm64" ]; then
-    export ARCH="osx-arm64"
-  fi
-
-  mkdir -p "${BIN_DIR}"
-  curl -L -s \
-    "https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istioctl-${ISTIO_VERSION}-${ARCH}.tar.gz" | tar -xvz -C "${BIN_DIR}"
-  chmod +x "${ISTIO_CLI}"
-  export PATH=${BIN_DIR}:$PATH
-}
 
 istio_install() {
   istio_install_cli
@@ -91,10 +74,10 @@ spec:
     global:
       defaultPodDisruptionBudget:
         enabled: false
-      meshID: ${MESHID}
+      meshID: ${ISTIO_MESHID}
       multiCluster:
         clusterName: ${context} 
-      network: ${NETWORK}
+      network: ${ISTIO_NETWORK}
     pilot:
       autoscaleEnabled: false
 EOF
@@ -177,14 +160,14 @@ istio_enable_endpoint_discovery() {
 
     echo "Creating remote secret from ${current_context} and applying it to ${target_context}"
 
-    istioctl create-remote-secret \
+    ${ISTIO_CLI} create-remote-secret \
       --context="${current_context}" \
       --name="${current_context}" | \
       kubectl apply -f - --context="${target_context}"
   done
 }
 
-deploy_helloworld() {
+istio_deploy_app_helloworld() {
   context="$1"
   namespace="$2"
   version="$3"
@@ -219,7 +202,7 @@ EOF
     -l app=helloworld -l version=${version}
 }
 
-deploy_sleep() {
+istio_deploy_app_sleep() {
   context="$1"
   namespace="$2"
 
