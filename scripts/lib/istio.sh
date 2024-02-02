@@ -8,6 +8,7 @@ export ISTIO_GW_BASE_PORT_HTTPS=31443
 export ISTIO_PORT_OFFSET=1000
 export ISTIO_MESHID=mesh1
 export ISTIO_NETWORK=network1
+export OS=$(uname -s)
 
 BIN_DIR=${BIN_DIR:-.}
 ISTIO_CLI="${BIN_DIR}/istioctl"
@@ -33,6 +34,8 @@ istio_install() {
     istio_deploy_app_sleep "${context}" "${namespace}"
     cluster_counter=$((cluster_counter + 1))
   done
+
+
 
 }
 
@@ -151,8 +154,17 @@ EOF
 }
 
 istio_enable_endpoint_discovery() {
-  contexts=("$*")
+  contexts=("$@")
   num_contexts=${#contexts[@]}
+
+  # Determine OS and get local IP address accordingly
+  case "$OS" in
+      Linux*)     LOCAL_IP=$(hostname -I | awk '{print $1}') ;;
+      Darwin*)    LOCAL_IP=$(ipconfig getifaddr en0) ;;
+      *)          echo "Unsupported OS: $OS"; exit 1 ;;
+  esac
+
+  echo "Local IP Address: $LOCAL_IP"
 
   for i in $(seq 0 $((num_contexts - 1))); do
     current_context="${contexts[i]}"
@@ -160,9 +172,18 @@ istio_enable_endpoint_discovery() {
 
     echo "Creating remote secret from ${current_context} and applying it to ${target_context}"
 
+    # Dynamically get the API server port for the current context
+    API_SERVER_PORT=$(kubectl --context="${current_context}" config view -o jsonpath="{.clusters[?(@.name == '${current_context}')].cluster.server}" | sed 's|.*:||')
+
+    # Construct the API server address using the local IP and dynamically obtained port
+    API_SERVER_ADDRESS="https://${LOCAL_IP}:${API_SERVER_PORT}"
+    echo "API Server Address for context ${current_context}: $API_SERVER_ADDRESS"
+
+    # Use the constructed API server address with --server option
     ${ISTIO_CLI} create-remote-secret \
       --context="${current_context}" \
-      --name="${current_context}" | \
+      --name="${current_context}" \
+      --server="${API_SERVER_ADDRESS}" | \
       kubectl apply -f - --context="${target_context}"
   done
 }
