@@ -1,45 +1,20 @@
 #!/bin/sh
-set -o nounset
+set -u -o errexit -x
 
-export ISTIO_NAMESPACE="istio-system"
-export ISTIO_GW_NAMESPACE="istio-gateways"
 export ISTIO_GW_BASE_PORT_HTTP=31080
 export ISTIO_GW_BASE_PORT_HTTPS=31443
 export ISTIO_PORT_OFFSET=1000
-export ISTIO_MESHID=mesh1
-export ISTIO_NETWORK=network1
-export OS=$(uname -s)
 
 BIN_DIR=${BIN_DIR:-.}
 ISTIO_CLI="${BIN_DIR}/istioctl"
 ISTIO_VERSION="1.20.2"
+ISTIO_NAMESPACE="istio-system"
+ISTIO_GW_NAMESPACE="istio-gateways"
+ISTIO_APPS_NAMESPACE="istio-apps"
+ISTIO_MESHID=mesh1
+ISTIO_NETWORK=network1
 
-istio_install() {
-  istio_install_cli
-  clusters_contexts=("$@")
-
-  namespace="sample"
-  versions=("v1" "v2")
-
-  cluster_counter=0
-  for context in "${clusters_contexts[@]}"; do
-    echo "installing istio in ${context} cluster"
-    istio_install_control_plane "${context}"
-    istio_install_gateway "${cluster_counter}" "${context}"
-    # Deploy HelloWorld app with the corresponding version
-    version="${versions[cluster_counter]:-}"
-    echo "Deploying HelloWorld ${version} in ${context}"
-    istio_deploy_app_helloworld "${context}" "${namespace}" "${version}"
-    echo "Deploying Sleep app in ${context}"
-    istio_deploy_app_sleep "${context}" "${namespace}"
-    cluster_counter=$((cluster_counter + 1))
-  done
-
-
-
-}
-
-istio_install_cli (){
+istio_install_cli() {
   echo "Downloading istioctl tool to ${BIN_DIR} output folder"
 
   ARCH="$(uname -m)"
@@ -53,6 +28,27 @@ istio_install_cli (){
   curl -L -s \
     "https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istioctl-${ISTIO_VERSION}-${ARCH}.tar.gz" | tar -xvz -C "${BIN_DIR}"
   chmod +x "${ISTIO_CLI}"
+}
+
+istio_install() {
+  istio_install_cli
+
+  clusters_contexts="${1}"
+  cluster_counter=0
+  for context in ${clusters_contexts}; do
+    echo "installing istio in ${context} cluster"
+    istio_install_control_plane "${context}"
+    istio_install_gateway "${cluster_counter}" "${context}"
+
+    helloworld_version="v$((cluster_counter + 1))"
+    echo "Deploying HelloWorld app ${helloworld_version} in ${context}"
+    istio_deploy_app_helloworld "${context}" "${ISTIO_APPS_NAMESPACE}" "${helloworld_version}"
+
+    echo "Deploying Sleep app in ${context}"
+    istio_deploy_app_sleep "${context}" "${ISTIO_APPS_NAMESPACE}"
+
+    cluster_counter=$((cluster_counter + 1))
+  done
 }
 
 istio_install_control_plane() {
@@ -79,7 +75,7 @@ spec:
         enabled: false
       meshID: ${ISTIO_MESHID}
       multiCluster:
-        clusterName: ${context} 
+        clusterName: ${context}
       network: ${ISTIO_NETWORK}
     pilot:
       autoscaleEnabled: false
@@ -153,48 +149,22 @@ spec:
 EOF
 }
 
-istio_enable_endpoint_discovery() {
-  contexts=("$@")
-  num_contexts=${#contexts[@]}
-
-  # Determine OS and get local IP address accordingly
-  case "$OS" in
-      Linux*)     LOCAL_IP=$(hostname -I | awk '{print $1}') ;;
-      Darwin*)    LOCAL_IP=$(ipconfig getifaddr en0) ;;
-      *)          echo "Unsupported OS: $OS"; exit 1 ;;
-  esac
-
-  echo "Local IP Address: $LOCAL_IP"
-
-  for i in $(seq 0 $((num_contexts - 1))); do
-    current_context="${contexts[i]}"
-    target_context="${contexts[$(( (i + 1) % num_contexts ))]}"
-
-    echo "Creating remote secret from ${current_context} and applying it to ${target_context}"
-
-    # Dynamically get the API server port for the current context
-    API_SERVER_PORT=$(kubectl --context="${current_context}" config view -o jsonpath="{.clusters[?(@.name == '${current_context}')].cluster.server}" | sed 's|.*:||')
-
-    # Construct the API server address using the local IP and dynamically obtained port
-    API_SERVER_ADDRESS="https://${LOCAL_IP}:${API_SERVER_PORT}"
-    echo "API Server Address for context ${current_context}: $API_SERVER_ADDRESS"
-
-    # Use the constructed API server address with --server option
-    ${ISTIO_CLI} create-remote-secret \
-      --context="${current_context}" \
-      --name="${current_context}" \
-      --server="${API_SERVER_ADDRESS}" | \
-      kubectl apply -f - --context="${target_context}"
-  done
-}
-
 istio_deploy_app_helloworld() {
-  context="$1"
-  namespace="$2"
-  version="$3"
+  context="${1}"
+  namespace="${2}"
+  version="${3}"
 
-  # Define the HelloWorld service YAML
-  helloworld_service_yaml=$(cat <<EOF
+  # Create namespace and label it for Istio sidecar injection
+  kubectl create --context="${context}" namespace "${namespace}" || true
+  kubectl label --context="${context}" namespace "${namespace}" istio-injection=enabled --overwrite
+
+  # Deploy Helloworld app
+  kubectl apply --context="${context}" -n "${namespace}" -f \
+    "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/helloworld/helloworld.yaml" \
+    -l app=helloworld -l version="${version}"
+
+  # Apply the HelloWorld service YAML
+  kubectl apply --context="${context}" -n "${namespace}" -f - <<EOF
 apiVersion: v1
 kind: Service
 metadata:
@@ -207,26 +177,17 @@ spec:
   selector:
     app: helloworld
 EOF
-  )
+}
+
+istio_deploy_app_sleep() {
+  context="${1}"
+  namespace="${2}"
 
   # Create namespace and label it for Istio sidecar injection
   kubectl create --context="${context}" namespace "${namespace}" || true
   kubectl label --context="${context}" namespace "${namespace}" istio-injection=enabled --overwrite
 
-  # Apply the HelloWorld service YAML
-  echo "$helloworld_service_yaml" | kubectl apply --context="${context}" -f -
-  echo "version: ${version}"
-  echo "context ${context}"
-  # Deploy HelloWorld app
-  kubectl apply --context="${context}" -n "${namespace}" -f \
-    "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/helloworld/helloworld.yaml" \
-    -l app=helloworld -l version=${version}
-}
-
-istio_deploy_app_sleep() {
-  context="$1"
-  namespace="$2"
-
+  # Deploy Sleep app
   kubectl apply --context="${context}" -n "${namespace}" -f \
     "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/sleep/sleep.yaml"
 }
