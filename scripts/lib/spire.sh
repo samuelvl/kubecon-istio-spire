@@ -35,10 +35,10 @@ spire_install_agent() {
 
 spire_wait_for_node_attestation() {
   context="${1}"
-  for _ in $(seq 60); do
+  for _ in $(seq 120); do
     if (kubectl logs --context="${context}" -n "${SPIRE_NAMESPACE}" --tail=-1 pod/spire-server-0 |
       grep -e ".*Agent attestation request completed.*k8s_sat.*"); then break; fi
-    sleep 1
+    sleep 5
   done
 }
 
