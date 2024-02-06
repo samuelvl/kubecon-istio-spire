@@ -21,13 +21,7 @@ cleanup-test-clusters:
 .PHONY: install-istio
 install-istio:
 	BIN_DIR=$(BIN_DIR) . ./scripts/lib/istio.sh; \
-	istio_install "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2"
-
-# Install Spire stack
-.PHONY: install-spire
-install-spire:
-	BIN_DIR=$(BIN_DIR) . ./scripts/lib/spire.sh; \
-	spire_install "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2"
+	istio_install "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2";
 
 # Clean up
 .PHONY: clean

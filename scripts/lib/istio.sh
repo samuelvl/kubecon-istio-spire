@@ -1,8 +1,6 @@
 #!/bin/sh
-set -o nounset
+set -u -o errexit -x
 
-export ISTIO_NAMESPACE="istio-system"
-export ISTIO_GW_NAMESPACE="istio-gateways"
 export ISTIO_GW_BASE_PORT_HTTP=31080
 export ISTIO_GW_BASE_PORT_HTTPS=31443
 export ISTIO_PORT_OFFSET=1000
@@ -10,6 +8,11 @@ export ISTIO_PORT_OFFSET=1000
 BIN_DIR=${BIN_DIR:-.}
 ISTIO_CLI="${BIN_DIR}/istioctl"
 ISTIO_VERSION="1.20.2"
+ISTIO_NAMESPACE="istio-system"
+ISTIO_GW_NAMESPACE="istio-gateways"
+ISTIO_APPS_NAMESPACE="istio-apps"
+ISTIO_MESHID=mesh1
+ISTIO_NETWORK=network1
 
 istio_install_cli() {
   echo "Downloading istioctl tool to ${BIN_DIR} output folder"
@@ -17,7 +20,7 @@ istio_install_cli() {
   ARCH="$(uname -m)"
   if [ "$ARCH" = "x86_64" ]; then
     export ARCH="linux-amd64"
-  elif [ "$ARCH" = "aarch64" ]; then
+  elif [ "$ARCH" = "arm64" ]; then
     export ARCH="osx-arm64"
   fi
 
@@ -30,18 +33,27 @@ istio_install_cli() {
 istio_install() {
   istio_install_cli
 
-  clusters_context="$*"
+  clusters_contexts="${1}"
   cluster_counter=0
-  for context in ${clusters_context}; do
+  for context in ${clusters_contexts}; do
     echo "installing istio in ${context} cluster"
     istio_install_control_plane "${context}"
     istio_install_gateway "${cluster_counter}" "${context}"
+
+    helloworld_version="v$((cluster_counter + 1))"
+    echo "Deploying HelloWorld app ${helloworld_version} in ${context}"
+    istio_deploy_app_helloworld "${context}" "${ISTIO_APPS_NAMESPACE}" "${helloworld_version}"
+
+    echo "Deploying Sleep app in ${context}"
+    istio_deploy_app_sleep "${context}" "${ISTIO_APPS_NAMESPACE}"
+
     cluster_counter=$((cluster_counter + 1))
   done
 }
 
 istio_install_control_plane() {
   context="${1}"
+
   kubectl create --context="${context}" namespace "${ISTIO_NAMESPACE}" || true
 
   # Install Istio control plane
@@ -61,6 +73,10 @@ spec:
     global:
       defaultPodDisruptionBudget:
         enabled: false
+      meshID: ${ISTIO_MESHID}
+      multiCluster:
+        clusterName: ${context}
+      network: ${ISTIO_NETWORK}
     pilot:
       autoscaleEnabled: false
 EOF
@@ -131,4 +147,47 @@ spec:
         autoscaleEnabled: false
         injectionTemplate: gateway
 EOF
+}
+
+istio_deploy_app_helloworld() {
+  context="${1}"
+  namespace="${2}"
+  version="${3}"
+
+  # Create namespace and label it for Istio sidecar injection
+  kubectl create --context="${context}" namespace "${namespace}" || true
+  kubectl label --context="${context}" namespace "${namespace}" istio-injection=enabled --overwrite
+
+  # Deploy Helloworld app
+  kubectl apply --context="${context}" -n "${namespace}" -f \
+    "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/helloworld/helloworld.yaml" \
+    -l app=helloworld -l version="${version}"
+
+  # Apply the HelloWorld service YAML
+  kubectl apply --context="${context}" -n "${namespace}" -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: helloworld
+  namespace: ${namespace}
+spec:
+  ports:
+  - name: http
+    port: 5000
+  selector:
+    app: helloworld
+EOF
+}
+
+istio_deploy_app_sleep() {
+  context="${1}"
+  namespace="${2}"
+
+  # Create namespace and label it for Istio sidecar injection
+  kubectl create --context="${context}" namespace "${namespace}" || true
+  kubectl label --context="${context}" namespace "${namespace}" istio-injection=enabled --overwrite
+
+  # Deploy Sleep app
+  kubectl apply --context="${context}" -n "${namespace}" -f \
+    "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/sleep/sleep.yaml"
 }

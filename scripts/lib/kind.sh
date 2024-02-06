@@ -1,33 +1,35 @@
 #!/bin/sh
-set -o nounset
+set -u -o errexit -x
 
 . "./scripts/lib/istio.sh"
 
 BIN_DIR=${BIN_DIR:-.}
 KIND_CLI="${BIN_DIR}/kind"
 KIND_VERSION="0.20.0"
-KIND_NODE_IMAGE="docker.io/kindest/node:v1.27.3@sha256:3966ac761ae0136263ffdb6cfd4db23ef8a83cba8a463690e98317add2c9ba72"
+KIND_NODE_IMAGE="docker.io/kindest/node:v1.29.1@sha256:3966ac761ae0136263ffdb6cfd4db23ef8a83cba8a463690e98317add2c9ba72"
 
 kind_install_cli() {
   echo "Downloading kind cli tool to ${BIN_DIR} output folder"
 
   ARCH="$(uname -m)"
   if [ "$ARCH" = "x86_64" ]; then
-    export ARCH="amd64"
-  elif [ "$ARCH" = "aarch64" ]; then
-    export ARCH="arm64"
+    ARCH="amd64"
+    OS="linux"
+  elif [ "$ARCH" = "arm64" ]; then
+    ARCH="arm64"
+    OS="darwin"
   fi
 
   mkdir -p "${BIN_DIR}"
   curl -L -s -o "${KIND_CLI}" \
-    "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-${ARCH}"
+    "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-${OS}-${ARCH}"
   chmod +x "${KIND_CLI}"
 }
 
 kind_create_clusters() {
   kind_install_cli
 
-  clusters="$*"
+  clusters="${1}"
   cluster_counter=0
   for cluster_name in ${clusters}; do
     if kind_cluster_exists "${cluster_name}"; then
@@ -59,7 +61,7 @@ EOF
 }
 
 kind_delete_clusters() {
-  clusters="$*"
+  clusters="${1}"
   for cluster_name in ${clusters}; do
     if kind_cluster_exists "${cluster_name}"; then
       ${KIND_CLI} delete clusters "${cluster_name}"
