@@ -245,6 +245,7 @@ function generate_istio_root_ca() {
     echo "Generating root CA certificates..."
 
     cat > "${ISTIO_OPENSSL_CONFIG}" <<EOF
+
 [ req ]
 encrypt_key = no
 prompt = no
