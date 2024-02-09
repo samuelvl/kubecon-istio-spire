@@ -211,11 +211,8 @@ function istio_enable_endpoint_discovery() {
     # Adjust the context name to match the container naming convention
     local CONTAINER_NAME=$(echo ${current_context} | sed 's/^kind-//')-control-plane
 
-    # Extract the container ID using the adjusted container name
-    local CONTAINER_ID=$(docker ps --filter "name=${CONTAINER_NAME}" --format "{{.ID}}")
-
     # Dynamically get the API server IP address for the current context using docker inspect
-    local API_SERVER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${CONTAINER_ID})
+    local API_SERVER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${CONTAINER_NAME})
 
     # Construct the API server address using the container IP and the standard API server port (6443)
     local API_SERVER_ADDRESS="https://${API_SERVER_IP}:6443"
