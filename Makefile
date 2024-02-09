@@ -27,9 +27,9 @@ install-spire:
 .PHONY: install-istio
 install-istio:
 	BIN_DIR=$(BIN_DIR) . ./scripts/lib/istio.sh; \
-	istio_install "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2";
+	istio_install_multicluster "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2";
 
 # Clean up
 .PHONY: clean
 clean: cleanup-test-clusters
-	rm -rf $(BIN_DIR)/*
+	rm -rf $(OUTPUT_DIR)/*
