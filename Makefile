@@ -10,7 +10,7 @@ install: setup-test-clusters install-spire install-istio
 .PHONY: setup-test-clusters
 setup-test-clusters:
 	BIN_DIR=$(BIN_DIR) . ./scripts/lib/kind.sh; \
-	kind_create_clusters "$(CLUSTER_BASE_NAME)-1" "$(CLUSTER_BASE_NAME)-2"
+	kind_create_clusters "$(CLUSTER_BASE_NAME)-1 $(CLUSTER_BASE_NAME)-2"
 
 .PHONY: cleanup-test-clusters
 cleanup-test-clusters:
