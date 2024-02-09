@@ -46,7 +46,7 @@ istio_install() {
 
   for context in ${clusters_contexts}; do
     echo "Generate and apply istio certificates"   
-    generate_istio_certificate_and_key ${context}
+    istio_generate_cluster_certificate ${context}
 
     echo "Installing Istio in ${context} cluster"
     istio_install_control_plane ${context}
