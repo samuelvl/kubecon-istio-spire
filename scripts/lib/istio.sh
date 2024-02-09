@@ -219,16 +219,16 @@ function istio_enable_endpoint_discovery() {
     echo "API Server Address for context ${current_context}: $API_SERVER_ADDRESS"
 
     # For each context, create and apply remote secrets to every other context
-    for target_context in ${cluster_contexts[@]}; do
-      if [[ ${target_context} != ${current_context} ]]; then
-        echo "Creating remote secret from ${current_context} and applying it to ${target_context}"
+    for remote_context in ${cluster_contexts}; do
+      if [[ ${remote_context} != ${current_context} ]]; then
+        echo "Creating remote secret from ${current_context} and applying it to ${remote_context}"
 
         # Use the constructed API server address with --server option
         ${ISTIO_CLI} create-remote-secret \
           --context=${current_context} \
           --name=${current_context} \
           --server=${API_SERVER_ADDRESS} | \
-          kubectl apply -f - --context=${target_context}
+          kubectl apply -f - --context=${remote_context}
       fi
     done
   done
