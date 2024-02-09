@@ -40,11 +40,14 @@ istio_install() {
 
   clusters_contexts="${1}"
   cluster_counter=0
-  versions=("v1" "v2")
 
   istio_generate_root_ca
 
   for context in ${clusters_contexts}; do
+
+    echo "Creating istio-sytsem namespace"
+    kubectl create --context="${context}" namespace "${ISTIO_NAMESPACE}" || true 
+    
     echo "Generate and apply istio certificates"   
     istio_generate_cluster_certificate ${context}
 
@@ -269,9 +272,7 @@ EOF
 } 
 
 function generate_istio_certificate_and_key() {
-    context="${1}"
-
-    kubectl create --context="${context}" namespace "${ISTIO_NAMESPACE}" || true    
+    context="${1}"   
 
     # Define directory for the cluster's certificates within ISTIO_CERTS_DIR
     CLUSTER_CERTS_DIR="${ISTIO_CERTS_DIR}/${context}"
