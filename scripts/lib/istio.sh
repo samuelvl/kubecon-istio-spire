@@ -13,6 +13,11 @@ ISTIO_GW_NAMESPACE="istio-gateways"
 ISTIO_APPS_NAMESPACE="istio-apps"
 ISTIO_MESHID=mesh1
 ISTIO_NETWORK=network1
+ISTIO_CERTS_DIR=certs
+ISTIO_ROOT_CERT="${ISTIO_CERTS_DIR}/root-cert.pem"
+ISTIO_ROOT_KEY="${ISTIO_CERTS_DIR}/root-key.pem"
+ISTIO_CA_CHAIN="${ISTIO_CERTS_DIR}/cert-chain.pem"
+ISTIO_OPENSSL_CONFIG="${ISTIO_CERTS_DIR}/openssl.cnf"
 
 istio_install_cli() {
   echo "Downloading istioctl tool to ${BIN_DIR} output folder"
@@ -35,26 +40,33 @@ istio_install() {
 
   clusters_contexts="${1}"
   cluster_counter=0
-  for context in ${clusters_contexts}; do
-    echo "installing istio in ${context} cluster"
-    istio_install_control_plane "${context}"
-    istio_install_gateway "${cluster_counter}" "${context}"
+  versions=("v1" "v2")
 
+  generate_istio_root_ca
+
+  for context in ${clusters_contexts}; do
+    echo "Generate and apply istio certificates"   
+    generate_istio_certificate_and_key ${context}
+
+    echo "Installing Istio in ${context} cluster"
+    istio_install_control_plane ${context}
+    istio_install_gateway ${cluster_counter} ${context}
+
+    # Assuming versions are meant to be cycled through for each context
     helloworld_version="v$((cluster_counter + 1))"
     echo "Deploying HelloWorld app ${helloworld_version} in ${context}"
-    istio_deploy_app_helloworld "${context}" "${ISTIO_APPS_NAMESPACE}" "${helloworld_version}"
-
+    istio_deploy_app_helloworld ${context} ${ISTIO_APPS_NAMESPACE} ${helloworld_version}
     echo "Deploying Sleep app in ${context}"
-    istio_deploy_app_sleep "${context}" "${ISTIO_APPS_NAMESPACE}"
+    istio_deploy_app_sleep ${context} ${ISTIO_APPS_NAMESPACE}
 
     cluster_counter=$((cluster_counter + 1))
   done
+
+  istio_enable_endpoint_discovery ${clusters_contexts}
 }
 
 istio_install_control_plane() {
   context="${1}"
-
-  kubectl create --context="${context}" namespace "${ISTIO_NAMESPACE}" || true
 
   # Install Istio control plane
   cat <<EOF | istioctl install --context "${context}" -y --verify -f -
@@ -191,3 +203,101 @@ istio_deploy_app_sleep() {
   kubectl apply --context="${context}" -n "${namespace}" -f \
     "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/sleep/sleep.yaml"
 }
+
+function istio_enable_endpoint_discovery() {
+  local cluster_contexts=("$@")
+
+  for current_context in ${cluster_contexts[@]}; do
+    # Adjust the context name to match the container naming convention
+    local CONTAINER_NAME=$(echo ${current_context} | sed 's/^kind-//')-control-plane
+
+    # Extract the container ID using the adjusted container name
+    local CONTAINER_ID=$(docker ps --filter "name=${CONTAINER_NAME}" --format "{{.ID}}")
+
+    # Dynamically get the API server IP address for the current context using docker inspect
+    local API_SERVER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${CONTAINER_ID})
+
+    # Construct the API server address using the container IP and the standard API server port (6443)
+    local API_SERVER_ADDRESS="https://${API_SERVER_IP}:6443"
+    echo "API Server Address for context ${current_context}: $API_SERVER_ADDRESS"
+
+    # For each context, create and apply remote secrets to every other context
+    for target_context in ${cluster_contexts[@]}; do
+      if [[ ${target_context} != ${current_context} ]]; then
+        echo "Creating remote secret from ${current_context} and applying it to ${target_context}"
+
+        # Use the constructed API server address with --server option
+        ${ISTIO_CLI} create-remote-secret \
+          --context=${current_context} \
+          --name=${current_context} \
+          --server=${API_SERVER_ADDRESS} | \
+          kubectl apply -f - --context=${target_context}
+      fi
+    done
+  done
+}
+
+function generate_istio_root_ca() {
+
+    # Create the certs directory
+    mkdir -p "${ISTIO_CERTS_DIR}"
+
+    echo "Generating root CA certificates..."
+
+    cat > "${ISTIO_OPENSSL_CONFIG}" <<EOF
+[ req ]
+encrypt_key = no
+prompt = no
+utf8 = yes
+default_md = sha256
+default_bits = 4096
+req_extensions = req_ext
+x509_extensions = req_ext
+distinguished_name = req_dn
+
+[ req_ext ]
+subjectKeyIdentifier = hash
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature, nonRepudiation, keyEncipherment, keyCertSign
+
+[ req_dn ]
+O = Istio
+CN = Root CA
+EOF
+
+    openssl genrsa -out "${ISTIO_ROOT_KEY}" 4096
+    openssl req -x509 -new -nodes -key "${ISTIO_ROOT_KEY}" -sha256 -days 3650 -subj "/O=Istio/CN=Root CA" -out "${ISTIO_ROOT_CERT}" -config "${ISTIO_OPENSSL_CONFIG}"
+
+} 
+
+function generate_istio_certificate_and_key() {
+    context="${1}"
+
+    kubectl create --context="${context}" namespace "${ISTIO_NAMESPACE}" || true    
+
+    # Define directory for the cluster's certificates within ISTIO_CERTS_DIR
+    CLUSTER_CERTS_DIR="${ISTIO_CERTS_DIR}/${context}"
+    mkdir -p "${CLUSTER_CERTS_DIR}"
+
+    # Define file names for the cluster's certificates
+    ISTIO_CA_CERT="${CLUSTER_CERTS_DIR}/ca-cert.pem"
+    ISTIO_CA_KEY="${CLUSTER_CERTS_DIR}/ca-key.pem"
+
+    echo "Generating CA certificate and key for context: ${context}"
+    openssl req -new -sha256 -nodes -newkey rsa:4096 -subj "/O=Istio/CN=Istio CA ${context}" -keyout "${ISTIO_CA_KEY}" -out "${CLUSTER_CERTS_DIR}/${context}-csr.pem"
+    openssl x509 -req -days 3650 -CA "${ISTIO_ROOT_CERT}" -CAkey "${ISTIO_ROOT_KEY}" -set_serial 1 -in "${CLUSTER_CERTS_DIR}/${context}-csr.pem" -out "${ISTIO_CA_CERT}" -extfile "${ISTIO_OPENSSL_CONFIG}" -extensions req_ext
+
+
+    cat "${ISTIO_CA_CERT}" "${ISTIO_ROOT_CERT}" > "${ISTIO_CA_CHAIN}"
+
+    echo "Applying certificates to ${context}..."
+    kubectl --context="${context}" create secret generic cacerts -n istio-system \
+      --from-file=ca-cert.pem="${ISTIO_CA_CERT}" \
+      --from-file=ca-key.pem="${ISTIO_CA_KEY}" \
+      --from-file=root-cert.pem="${ISTIO_ROOT_CERT}" \
+      --from-file=cert-chain.pem="${ISTIO_CA_CHAIN}" \
+      --dry-run=client -o yaml | kubectl --context="${context}" apply -f -
+
+    echo "Certificates applied to cluster: ${context}"
+}
+
