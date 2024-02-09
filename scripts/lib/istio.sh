@@ -205,9 +205,9 @@ istio_deploy_app_sleep() {
 }
 
 function istio_enable_endpoint_discovery() {
-  local cluster_contexts=("$@")
+  cluster_contexts="${1}"
 
-  for current_context in ${cluster_contexts[@]}; do
+  for current_context in ${cluster_contexts}; do
     # Adjust the context name to match the container naming convention
     local CONTAINER_NAME=$(echo ${current_context} | sed 's/^kind-//')-control-plane
 
