@@ -42,7 +42,7 @@ istio_install() {
   cluster_counter=0
   versions=("v1" "v2")
 
-  generate_istio_root_ca
+  istio_generate_root_ca
 
   for context in ${clusters_contexts}; do
     echo "Generate and apply istio certificates"   
