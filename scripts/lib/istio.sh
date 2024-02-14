@@ -3,7 +3,6 @@ set -u -o errexit -x
 
 export ISTIO_GW_BASE_PORT_HTTP=31080
 export ISTIO_GW_BASE_PORT_HTTPS=31443
-export ISTIO_PORT_OFFSET=1000
 
 BIN_DIR=${BIN_DIR:-.}
 ISTIO_CLI="${BIN_DIR}/istioctl"
@@ -51,7 +50,7 @@ istio_install() {
 
     echo "Installing Istio in ${context} cluster"
     istio_install_control_plane "${context}"
-    istio_install_gateway "${cluster_counter}" "${context}"
+    istio_install_ns_gateway "${cluster_counter}" "${context}"
 
     echo "Installing Istio apps in ${context} cluster"
     helloworld_version="v$((cluster_counter + 1))"
@@ -81,7 +80,7 @@ istio_install_control_plane() {
   context="${1}"
 
   # Install Istio control plane
-  cat <<EOF | istioctl install --context "${context}" -y --verify -f -
+  cat <<EOF | ${ISTIO_CLI} install --context "${context}" -y --verify -f -
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
 metadata:
@@ -106,18 +105,12 @@ spec:
 EOF
 }
 
-istio_install_gateway() {
+istio_install_ns_gateway() {
   index="${1}"
   context="${2}"
+
   kubectl create --context="${context}" namespace "${ISTIO_GW_NAMESPACE}" || true
-
-  # Calculate unique port numbers for this cluster
-  port_offset=$((index * ISTIO_PORT_OFFSET))
-  istio_gw_port_http=$((ISTIO_GW_BASE_PORT_HTTP + port_offset))
-  istio_gw_port_https=$((ISTIO_GW_BASE_PORT_HTTPS + port_offset))
-
-  # Install Istio GW
-  cat <<EOF | istioctl install --context "${context}" -y -f -
+  cat <<EOF | ${ISTIO_CLI} install --context "${context}" -y -f -
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
 metadata:
@@ -136,6 +129,9 @@ spec:
           istio: ingressgateway
           traffic: north-south
         k8s:
+          env:
+            - name: ISTIO_META_ROUTER_MODE
+              value: sni-dnat
           service:
             type: NodePort
             selector:
@@ -143,14 +139,14 @@ spec:
               istio: ingressgateway
               traffic: north-south
             ports:
-              - port: 80
+              - name: http2
+                port: 80
                 targetPort: 8080
-                name: http2
-                nodePort: ${istio_gw_port_http}
-              - port: 443
+                nodePort: $(istio_unique_port "${index}" "${ISTIO_GW_BASE_PORT_HTTP}")
+              - name: https
+                port: 443
                 targetPort: 8443
-                name: https
-                nodePort: ${istio_gw_port_https}
+                nodePort: $(istio_unique_port "${index}" "${ISTIO_GW_BASE_PORT_HTTPS}")
           overlays:
             - apiVersion: apps/v1
               kind: Deployment
@@ -216,6 +212,14 @@ istio_deploy_app_sleep() {
     "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/sleep/sleep.yaml"
 }
 
+istio_unique_port() {
+  index="${1}"
+  base_port="${2}"
+
+  PORT_OFFSET=1000
+  echo $((base_port + index * PORT_OFFSET))
+}
+
 istio_api_server() {
   context="${1}"
 
@@ -232,14 +236,14 @@ istio_api_server() {
 istio_enable_endpoint_discovery() {
   context="${1}"
   remote_context="${2}"
-  istio_api_server="$(istio_api_server "${context}")"
+  remote_api_server="$(istio_api_server "${remote_context}")"
 
   ${ISTIO_CLI} create-remote-secret \
-    --context="${current_context}" \
-    --name="${current_context}" \
-    --server="${istio_api_server}" \
+    --context="${remote_context}" \
+    --name="${remote_context}" \
+    --server="${remote_api_server}" \
     --namespace="${ISTIO_NAMESPACE}" |
-    kubectl apply -f - --context="${remote_context}"
+    kubectl apply -f - --context="${context}"
 }
 
 istio_generate_root_ca() {
