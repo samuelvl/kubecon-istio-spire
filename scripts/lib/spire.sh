@@ -41,5 +41,3 @@ spire_wait_for_node_attestation() {
     sleep 5
   done
 }
-
-"$@"
