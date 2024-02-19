@@ -6,7 +6,6 @@ set -u -o errexit -x
 SPIFFE_HELM_CHART_VERSION="0.17.2"
 SPIFFE_CRDS_HELM_CHART_VERSION="0.3.0"
 SPIRE_SYSTEM_NAMESPACE="spire-system"
-SPIRE_SERVER_NAMESPACE="spire-server"
 
 spire_install() {
   contexts="${1}"
@@ -26,7 +25,6 @@ spire_helm_install() {
   ${HELM_CLI} repo update spiffe
 
   kubectl create namespace "${SPIRE_SYSTEM_NAMESPACE}" --dry-run=client -o yaml | kubectl --context="${context}" apply -f -
-  kubectl create namespace "${SPIRE_SERVER_NAMESPACE}" --dry-run=client -o yaml | kubectl --context="${context}" apply -f -
 
   ${HELM_CLI} upgrade \
     --install spire-crds spiffe/spire-crds \
