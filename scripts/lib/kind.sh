@@ -1,6 +1,7 @@
 #!/bin/sh
 set -u -o errexit -x
 
+. "./scripts/lib/spire.sh"
 . "./scripts/lib/istio.sh"
 
 BIN_DIR=${BIN_DIR:-.}
@@ -47,6 +48,12 @@ nodes:
 - role: control-plane
   image: ${KIND_NODE_IMAGE}
   extraPortMappings:
+    - containerPort: ${SPIRE_SERVER_BASE_PORT_GRPC}
+      hostPort: $(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_GRPC}")
+      protocol: TCP
+    - containerPort: ${SPIRE_SERVER_BASE_PORT_FEDERATION}
+      hostPort: $(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_FEDERATION}")
+      protocol: TCP
     - containerPort: ${ISTIO_GW_BASE_PORT_HTTP}
       hostPort: $(istio_unique_port "${cluster_counter}" "${ISTIO_GW_BASE_PORT_HTTP}")
       protocol: TCP

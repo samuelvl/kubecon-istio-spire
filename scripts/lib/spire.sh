@@ -3,28 +3,42 @@ set -u -o errexit -x
 
 . "./scripts/lib/helm.sh"
 
+export SPIRE_SERVER_BASE_PORT_GRPC=30081
+export SPIRE_SERVER_BASE_PORT_FEDERATION=30043
+
 SPIFFE_HELM_CHART_VERSION="0.17.2"
 SPIFFE_CRDS_HELM_CHART_VERSION="0.3.0"
 SPIRE_SYSTEM_NAMESPACE="spire-system"
 
 spire_install() {
-  contexts="${1}"
+  clusters_contexts="${1}"
   helm_install_cli
-  for context in ${contexts}; do
-    remote_clusters=$(spire_remote_clusters "${context}" "${contexts}")
-    spire_helm_install "${context}" "${remote_clusters}"
+
+  cluster_counter=0
+  for context in ${clusters_contexts}; do
+    remote_clusters=$(spire_remote_clusters "${context}" "${clusters_contexts}")
+    spire_helm_install "${context}" "${cluster_counter}" "${remote_clusters}"
+    cluster_counter=$((cluster_counter + 1))
+  done
+
+  for context in ${clusters_contexts}; do
+    remote_clusters=$(spire_remote_clusters "${context}" "${clusters_contexts}")
+    spire_inject_bundle "${context}" "${remote_clusters}"
   done
 }
 
 spire_helm_install() {
   context="${1}"
-  remote_clusters="${2}"
+  cluster_counter="${2}"
+  remote_clusters="${3}"
   cluster=$(spire_cluster_name "${context}")
 
   ${HELM_CLI} repo add spiffe "https://spiffe.github.io/helm-charts-hardened" --force-update
   ${HELM_CLI} repo update spiffe
 
   kubectl create namespace "${SPIRE_SYSTEM_NAMESPACE}" --dry-run=client -o yaml | kubectl --context="${context}" apply -f -
+
+  spire_server_create_svc "${context}" "${cluster_counter}"
 
   ${HELM_CLI} upgrade \
     --install spire-crds spiffe/spire-crds \
@@ -68,7 +82,16 @@ spire-server:
     identities:
       clusterSPIFFEIDs:
         default:
+          enabled: false
+        oidc-discovery-provider:
+          enabled: false
+        test-keys:
+          enabled: false
+        istio:
           spiffeIDTemplate: "spiffe://{{ .TrustDomain }}/k8s/{{ .ClusterName }}/ns/{{ .PodMeta.Namespace }}/sa/{{ .PodSpec.ServiceAccountName }}"
+          podSelector:
+            matchLabels:
+              spiffe.io/spire-managed-identity: "true"
           federatesWith:
 $(spire_helm_federated_spiffe_ids "${remote_clusters}")
       clusterFederatedTrustDomains:
@@ -99,16 +122,18 @@ EOF
 
 spire_helm_federated_trust_domains() {
   remote_clusters="${1}"
+  cluster_counter=0
   for remote_cluster in ${remote_clusters}; do
     remote_cluster_domain=$(spire_trust_domain "${remote_cluster}")
     cat <<EOF
         ${remote_cluster}:
-          bundleEndpointProfile:
-            endpointSPIFFEID: spiffe://${remote_cluster_domain}/spire/server
-            type: https_spiffe
-          bundleEndpointURL: https://spire-server-federation.${remote_cluster_domain}
+          bundleEndpointURL: https://$(spire_server_bundle_endpoint "${remote_cluster}" "${cluster_counter}")
           trustDomain: ${remote_cluster_domain}
+          bundleEndpointProfile:
+            type: https_spiffe
+            endpointSPIFFEID: spiffe://${remote_cluster_domain}/spire/server
 EOF
+    cluster_counter=$((cluster_counter + 1))
   done
 }
 
@@ -121,7 +146,7 @@ spire_remote_clusters() {
       remote_clusters="${remote_clusters} $(spire_cluster_name "${remote_context}")"
     fi
   done
-  echo "${remote_clusters}"
+  echo "${remote_clusters}" | xargs
 }
 
 spire_cluster_name() {
@@ -132,4 +157,65 @@ spire_cluster_name() {
 spire_trust_domain() {
   cluster="${1}"
   echo "${cluster}-domain.local"
+}
+
+spire_server_bundle_endpoint() {
+  cluster="${1}"
+  cluster_counter="${2}"
+  bundle_endpoint_addr="${cluster}-control-plane.kind"
+  bundle_endpoint_port=$(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_FEDERATION}")
+  echo "${bundle_endpoint_addr}:${bundle_endpoint_port}"
+}
+
+spire_unique_port() {
+  cluster_counter="${1}"
+  base_port="${2}"
+
+  PORT_OFFSET=1000
+  echo $((base_port + cluster_counter * PORT_OFFSET))
+}
+
+spire_server_create_svc() {
+  context="${1}"
+  cluster_counter="${2}"
+
+  kubectl apply --context="${context}" -n "${SPIRE_SYSTEM_NAMESPACE}" -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-server-nodeport
+spec:
+  type: NodePort
+  internalTrafficPolicy: Cluster
+  selector:
+    app.kubernetes.io/instance: spire
+    app.kubernetes.io/name: server
+  ports:
+    - name: grpc
+      nodePort: $(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_GRPC}")
+      port: 8081
+      targetPort: grpc
+    - name: federation
+      nodePort: $(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_FEDERATION}")
+      port: 8443
+      targetPort: federation
+EOF
+}
+
+spire_inject_bundle() {
+  context="${1}"
+  remote_clusters="${2}"
+
+  for remote_cluster in ${remote_clusters}; do
+    remote_context="kind-${remote_cluster}"
+    spire_server_exec "${remote_context}" "bundle show -format spiffe" |
+      spire_server_exec "${context}" "bundle set -format spiffe -id spiffe://$(spire_trust_domain "${remote_cluster}")"
+  done
+}
+
+spire_server_exec() {
+  context="${1}"
+  command="${2}"
+  # shellcheck disable=SC2086
+  kubectl --context="${context}" exec -n "${SPIRE_SYSTEM_NAMESPACE}" -i spire-server-0 -- spire-server ${command}
 }
