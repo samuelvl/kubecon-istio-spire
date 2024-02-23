@@ -88,7 +88,7 @@ spire-server:
         test-keys:
           enabled: false
         istio:
-          spiffeIDTemplate: "spiffe://{{ .TrustDomain }}/k8s/{{ .ClusterName }}/ns/{{ .PodMeta.Namespace }}/sa/{{ .PodSpec.ServiceAccountName }}"
+          spiffeIDTemplate: spiffe://{{ .TrustDomain }}/ns/{{ .PodMeta.Namespace }}/sa/{{ .PodSpec.ServiceAccountName }}
           podSelector:
             matchLabels:
               spiffe.io/spire-managed-identity: "true"
@@ -122,18 +122,16 @@ EOF
 
 spire_helm_federated_trust_domains() {
   remote_clusters="${1}"
-  cluster_counter=0
   for remote_cluster in ${remote_clusters}; do
     remote_cluster_domain=$(spire_trust_domain "${remote_cluster}")
     cat <<EOF
         ${remote_cluster}:
-          bundleEndpointURL: https://$(spire_server_bundle_endpoint "${remote_cluster}" "${cluster_counter}")
+          bundleEndpointURL: https://$(spire_server_federation_endpoint "${remote_cluster}")
           trustDomain: ${remote_cluster_domain}
           bundleEndpointProfile:
             type: https_spiffe
             endpointSPIFFEID: spiffe://${remote_cluster_domain}/spire/server
 EOF
-    cluster_counter=$((cluster_counter + 1))
   done
 }
 
@@ -154,17 +152,32 @@ spire_cluster_name() {
   echo "${context}" | sed -e "s/^kind-//"
 }
 
+spire_context_name() {
+  cluster="${1}"
+  echo "kind-${cluster}"
+}
+
+spire_kind_node_name() {
+  cluster="${1}"
+  echo "${cluster}-control-plane"
+}
+
 spire_trust_domain() {
   cluster="${1}"
   echo "${cluster}-domain.local"
 }
 
-spire_server_bundle_endpoint() {
+spire_server_federation_endpoint() {
   cluster="${1}"
-  cluster_counter="${2}"
-  bundle_endpoint_addr="${cluster}-control-plane.kind"
-  bundle_endpoint_port=$(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_FEDERATION}")
-  echo "${bundle_endpoint_addr}:${bundle_endpoint_port}"
+  federation_endpoint_addr="$(spire_kind_node_name "${cluster}").kind"
+  federation_endpoint_port=$(spire_server_federation_endpoint_port "${cluster}")
+  echo "${federation_endpoint_addr}:${federation_endpoint_port}"
+}
+
+spire_server_federation_endpoint_port() {
+  cluster="${1}"
+  docker port "$(spire_kind_node_name "${cluster}")" | grep "${SPIRE_SERVER_BASE_PORT_FEDERATION}" |
+    sed -e "s#^\(.*\)0.0.0.0:\([0-9]*\)#\2#"
 }
 
 spire_unique_port() {
@@ -207,7 +220,7 @@ spire_inject_bundle() {
   remote_clusters="${2}"
 
   for remote_cluster in ${remote_clusters}; do
-    remote_context="kind-${remote_cluster}"
+    remote_context=$(spire_context_name "${remote_cluster}")
     spire_server_exec "${remote_context}" "bundle show -format spiffe" |
       spire_server_exec "${context}" "bundle set -format spiffe -id spiffe://$(spire_trust_domain "${remote_cluster}")"
   done
