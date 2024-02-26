@@ -6,6 +6,11 @@ HELM_CLI="${BIN_DIR}/helm"
 HELM_VERSION="3.14.1"
 
 helm_install_cli() {
+  if [ -f "${HELM_CLI}" ]; then
+    echo "${HELM_CLI} already exists"
+    return
+  fi
+
   echo "Downloading Helm cli tool to ${BIN_DIR} output folder"
 
   ARCH="$(uname -m)"

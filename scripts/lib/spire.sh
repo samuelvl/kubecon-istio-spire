@@ -98,11 +98,11 @@ $(spire_helm_federated_spiffe_ids "${remote_clusters}")
 $(spire_helm_federated_trust_domains "${remote_clusters}")
 
 spire-agent:
-  socketPath: /run/spire/agent-sockets-${cluster}/spire-agent.sock
+  socketPath: /run/spire/agent-sockets/spire-agent.sock
 
 spiffe-csi-driver:
-  pluginName: ${cluster}.csi.spiffe.io
-  agentSocketPath: /run/spire/agent-sockets-${cluster}/spire-agent.sock
+  pluginName: csi.spiffe.io
+  agentSocketPath: /run/spire/agent-sockets/spire-agent.sock
 
 spiffe-oidc-discovery-provider:
   enabled: false
@@ -164,7 +164,7 @@ spire_kind_node_name() {
 
 spire_trust_domain() {
   cluster="${1}"
-  echo "${cluster}-domain.local"
+  echo "${cluster}.local"
 }
 
 spire_server_federation_endpoint() {
