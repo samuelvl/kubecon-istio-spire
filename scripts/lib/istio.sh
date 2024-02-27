@@ -1,6 +1,8 @@
 #!/bin/sh
 set -u -o errexit -x
 
+. "./scripts/lib/spire.sh"
+
 export ISTIO_GW_BASE_PORT_HTTP=31080
 export ISTIO_GW_BASE_PORT_HTTPS=31443
 
@@ -18,7 +20,12 @@ ISTIO_ROOT_CA_KEY="${ISTIO_CERTS_DIR}/root-key.pem"
 ISTIO_CA_CHAIN="${ISTIO_CERTS_DIR}/cert-chain.pem"
 ISTIO_OPENSSL_CONFIG="${ISTIO_CERTS_DIR}/openssl.cnf"
 
-istio_install_cli() {
+istio_install_cli() { (
+  if [ -f "${ISTIO_CLI}" ]; then
+    echo "${ISTIO_CLI} already exists"
+    return
+  fi
+
   echo "Downloading istioctl tool to ${BIN_DIR} output folder"
 
   ARCH="$(uname -m)"
@@ -32,9 +39,9 @@ istio_install_cli() {
   curl -L -s \
     "https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istioctl-${ISTIO_VERSION}-${ARCH}.tar.gz" | tar -xvz -C "${BIN_DIR}"
   chmod +x "${ISTIO_CLI}"
-}
+); }
 
-istio_install() {
+istio_install() { (
   clusters_contexts="${1}"
 
   istio_install_cli
@@ -49,19 +56,20 @@ istio_install() {
     istio_generate_cluster_certificate "${context}"
 
     echo "Installing Istio in ${context} cluster"
-    istio_install_control_plane "${context}"
-    istio_install_ns_gateway "${cluster_counter}" "${context}"
+    spire_clusters=$(spire_remote_clusters "${context}" "${clusters_contexts}")
+    istio_install_control_plane "${context}" "${spire_clusters}"
+    istio_install_ns_gateway "${context}" "${cluster_counter}"
 
     echo "Installing Istio apps in ${context} cluster"
     helloworld_version="v$((cluster_counter + 1))"
-    istio_deploy_app_helloworld "${context}" ${ISTIO_APPS_NAMESPACE} ${helloworld_version}
-    istio_deploy_app_sleep "${context}" ${ISTIO_APPS_NAMESPACE}
+    istio_deploy_app_helloworld "${context}" "${ISTIO_APPS_NAMESPACE}" "${helloworld_version}"
+    istio_deploy_app_sleep "${context}" "${ISTIO_APPS_NAMESPACE}"
 
     cluster_counter=$((cluster_counter + 1))
   done
-}
+); }
 
-istio_install_multicluster() {
+istio_install_multicluster() { (
   clusters_contexts="${1}"
 
   istio_install "${clusters_contexts}"
@@ -74,13 +82,15 @@ istio_install_multicluster() {
       fi
     done
   done
-}
+); }
 
-istio_install_control_plane() {
+istio_install_control_plane() { (
   context="${1}"
+  spire_clusters="${2}"
+  cluster=$(istio_cluster_name "${context}")
 
   # Install Istio control plane
-  cat <<EOF | ${ISTIO_CLI} install --context "${context}" -y --verify -f -
+  cat <<EOF | tee /dev/tty | ${ISTIO_CLI} install --context "${context}" -y --verify -f -
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
 metadata:
@@ -89,9 +99,23 @@ metadata:
 spec:
   profile: minimal
   meshConfig:
+    trustDomain: $(spire_trust_domain "${cluster}")
+    caCertificates:
+$(istio_mesh_config_spire_bundle "${spire_clusters}")
+    defaultConfig:
+      proxyMetadata:
+        PROXY_CONFIG_XDS_AGENT: "true"
     accessLogFile: /dev/stdout
     outboundTrafficPolicy:
       mode: ALLOW_ANY
+  components:
+    pilot:
+      k8s:
+        env:
+          - name: ISTIO_MULTIROOT_MESH
+            value: "true"
+          - name: AUTO_RELOAD_PLUGIN_CERTS
+            value: "true"
   values:
     global:
       defaultPodDisruptionBudget:
@@ -102,15 +126,79 @@ spec:
       network: ${ISTIO_NETWORK}
     pilot:
       autoscaleEnabled: false
+    sidecarInjectorWebhook:
+      templates:
+        spire: |
+          spec:
+            containers:
+            - name: istio-proxy
+              volumeMounts:
+              - name: workload-socket
+                mountPath: /run/secrets/workload-spiffe-uds
+                readOnly: true
+            volumes:
+              - name: workload-socket
+                csi:
+                  driver: "csi.spiffe.io"
+                  readOnly: true
+        spire-gw: |
+          spec:
+            containers:
+            - name: istio-proxy
+              volumeMounts:
+              - name: workload-socket
+                mountPath: /run/secrets/workload-spiffe-uds
+                readOnly: true
+            volumes:
+              - name: workload-socket
+                emptyDir: null
+                csi:
+                  driver: "csi.spiffe.io"
+                  readOnly: true
+            initContainers:
+            - name: wait-for-spire-socket
+              image: busybox:1.28
+              volumeMounts:
+                - name: workload-socket
+                  mountPath: /run/secrets/workload-spiffe-uds
+                  readOnly: true
+              env:
+                - name: CHECK_FILE
+                  value: /run/secrets/workload-spiffe-uds/socket
+              command:
+                - sh
+                - "-c"
+                - |-
+                  echo "\$(date -Iseconds)" Waiting for: \${CHECK_FILE}
+                  while [[ ! -e \${CHECK_FILE} && ! -L \${CHECK_FILE} ]] ; do
+                    echo "\$(date -Iseconds)" File does not exist: \${CHECK_FILE}
+                    sleep 15
+                  done
+                  ls -l \${CHECK_FILE}
 EOF
-}
+); }
 
-istio_install_ns_gateway() {
-  index="${1}"
-  context="${2}"
+istio_mesh_config_spire_bundle() { (
+  remote_clusters="${1}"
+  for remote_cluster in ${remote_clusters}; do
+    remote_context=$(spire_context_name "${remote_cluster}")
+    remote_cluster_domain=$(spire_trust_domain "${remote_cluster}")
+    cat <<EOF
+      - trustDomains:
+          - ${remote_cluster_domain}
+        pem: |
+$(spire_get_bundle_pem "${remote_context}" | sed 's/^/          /')
+EOF
+  done
+); }
+
+istio_install_ns_gateway() { (
+  context="${1}"
+  cluster_counter="${2}"
+  cluster=$(istio_cluster_name "${context}")
 
   kubectl create --context="${context}" namespace "${ISTIO_GW_NAMESPACE}" || true
-  cat <<EOF | ${ISTIO_CLI} install --context "${context}" -y -f -
+  cat <<EOF | tee /dev/tty | ${ISTIO_CLI} install --context "${context}" --force -y -f -
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
 metadata:
@@ -119,6 +207,7 @@ metadata:
 spec:
   profile: empty
   meshConfig:
+    trustDomain: $(spire_trust_domain "${cluster}")
     accessLogFile: /dev/stdout
   components:
     ingressGateways:
@@ -128,6 +217,7 @@ spec:
         label:
           istio: ingressgateway
           traffic: north-south
+          spiffe.io/spire-managed-identity: "true"
         k8s:
           env:
             - name: ISTIO_META_ROUTER_MODE
@@ -142,11 +232,11 @@ spec:
               - name: http2
                 port: 80
                 targetPort: 8080
-                nodePort: $(istio_unique_port "${index}" "${ISTIO_GW_BASE_PORT_HTTP}")
+                nodePort: $(istio_unique_port "${cluster_counter}" "${ISTIO_GW_BASE_PORT_HTTP}")
               - name: https
                 port: 443
                 targetPort: 8443
-                nodePort: $(istio_unique_port "${index}" "${ISTIO_GW_BASE_PORT_HTTPS}")
+                nodePort: $(istio_unique_port "${cluster_counter}" "${ISTIO_GW_BASE_PORT_HTTPS}")
           overlays:
             - apiVersion: apps/v1
               kind: Deployment
@@ -165,23 +255,21 @@ spec:
     gateways:
       istio-ingressgateway:
         autoscaleEnabled: false
-        injectionTemplate: gateway
+        injectionTemplate: gateway,spire-gw
 EOF
-}
+); }
 
-istio_deploy_app_helloworld() {
+istio_deploy_app_helloworld() { (
   context="${1}"
   namespace="${2}"
-  version="${3}"
+  version="${3}" # v1 or v2
 
   # Create namespace and label it for Istio sidecar injection
   kubectl create --context="${context}" namespace "${namespace}" || true
-  kubectl label --context="${context}" namespace "${namespace}" istio-injection=enabled --overwrite
 
   # Deploy Helloworld app
-  kubectl apply --context="${context}" -n "${namespace}" -f \
-    "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/helloworld/helloworld.yaml" \
-    -l app=helloworld -l version="${version}"
+  kubectl apply --context="${context}" -n "${namespace}" \
+    -l app=helloworld -l version="${version}" -f scripts/manifests/istio/helloworld.yaml
 
   # Apply the HelloWorld service YAML
   kubectl apply --context="${context}" -n "${namespace}" -f - <<EOF
@@ -197,30 +285,36 @@ spec:
   selector:
     app: helloworld
 EOF
-}
 
-istio_deploy_app_sleep() {
+  kubectl --context="${context}" -n "${namespace}" rollout status "deploy/helloworld-${version}"
+); }
+
+istio_deploy_app_sleep() { (
   context="${1}"
   namespace="${2}"
 
   # Create namespace and label it for Istio sidecar injection
   kubectl create --context="${context}" namespace "${namespace}" || true
-  kubectl label --context="${context}" namespace "${namespace}" istio-injection=enabled --overwrite
 
   # Deploy Sleep app
-  kubectl apply --context="${context}" -n "${namespace}" -f \
-    "https://raw.githubusercontent.com/istio/istio/release-1.20/samples/sleep/sleep.yaml"
-}
+  kubectl apply --context="${context}" -n "${namespace}" -f scripts/manifests/istio/sleep.yaml
+  kubectl --context="${context}" -n "${namespace}" rollout status deploy/sleep
+); }
 
-istio_unique_port() {
+istio_cluster_name() { (
+  context="${1}"
+  echo "${context}" | sed -e "s/^kind-//"
+); }
+
+istio_unique_port() { (
   index="${1}"
   base_port="${2}"
 
   PORT_OFFSET=1000
   echo $((base_port + index * PORT_OFFSET))
-}
+); }
 
-istio_api_server() {
+istio_api_server() { (
   context="${1}"
 
   # Adjust the context name to match the container naming convention
@@ -231,9 +325,9 @@ istio_api_server() {
 
   # Construct the API server address using the container IP and the standard API server port (6443)
   echo "https://${istio_api_server_ip}:6443"
-}
+); }
 
-istio_enable_endpoint_discovery() {
+istio_enable_endpoint_discovery() { (
   context="${1}"
   remote_context="${2}"
   remote_api_server="$(istio_api_server "${remote_context}")"
@@ -244,11 +338,16 @@ istio_enable_endpoint_discovery() {
     --server="${remote_api_server}" \
     --namespace="${ISTIO_NAMESPACE}" |
     kubectl apply -f - --context="${context}"
-}
+); }
 
-istio_generate_root_ca() {
+istio_generate_root_ca() { (
   # Create the certs directory
   mkdir -p "${ISTIO_CERTS_DIR}"
+
+  if [ -f "${ISTIO_ROOT_CA_CERT}" ]; then
+    echo "Root CA already exists..."
+    return
+  fi
 
   echo "Generating root CA certificates..."
 
@@ -287,9 +386,9 @@ EOF
     -config "${ISTIO_OPENSSL_CONFIG}"
 
   cat "${ISTIO_ROOT_CA_CERT}" >"${ISTIO_CA_CHAIN}"
-}
+); }
 
-istio_generate_cluster_certificate() {
+istio_generate_cluster_certificate() { (
   context="${1}"
 
   # Define directory for the cluster's certificates within ISTIO_CERTS_DIR
@@ -301,6 +400,11 @@ istio_generate_cluster_certificate() {
   cluster_ca_key="${cluster_certs_dir}/ca-key.pem"
   cluster_cert_csr="${cluster_certs_dir}/csr.pem"
   cluster_ca_chain="${cluster_certs_dir}/cert-chain.pem"
+
+  if [ -f "${cluster_ca_cert}" ]; then
+    echo "Certificate for cluster ${context} already exists..."
+    return
+  fi
 
   echo "Generating CA certificate and key for context: ${context}"
   openssl req \
@@ -333,4 +437,4 @@ istio_generate_cluster_certificate() {
     --from-file=root-cert.pem="${ISTIO_ROOT_CA_CERT}" \
     --from-file=cert-chain.pem="${cluster_ca_chain}" \
     --dry-run=client -o yaml | kubectl --context="${context}" apply -f -
-}
+); }

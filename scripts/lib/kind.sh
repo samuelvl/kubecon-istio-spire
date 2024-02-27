@@ -10,6 +10,11 @@ KIND_VERSION="0.20.0"
 KIND_NODE_IMAGE="docker.io/kindest/node:v1.29.1@sha256:3966ac761ae0136263ffdb6cfd4db23ef8a83cba8a463690e98317add2c9ba72"
 
 kind_install_cli() {
+  if [ -f "${KIND_CLI}" ]; then
+    echo "${KIND_CLI} already exists"
+    return
+  fi
+
   echo "Downloading kind cli tool to ${BIN_DIR} output folder"
 
   ARCH="$(uname -m)"
@@ -38,7 +43,7 @@ kind_create_clusters() {
       continue
     fi
 
-    cat <<EOF | ${KIND_CLI} create cluster --name "${cluster}" --config=-
+    cat <<EOF | tee /dev/tty | ${KIND_CLI} create cluster --name "${cluster}" --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 networking:
