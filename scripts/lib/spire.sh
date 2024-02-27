@@ -3,8 +3,7 @@ set -u -o errexit -x
 
 . "./scripts/lib/helm.sh"
 
-export SPIRE_SERVER_BASE_PORT_GRPC=30081
-export SPIRE_SERVER_BASE_PORT_FEDERATION=30043
+export SPIRE_SERVER_BASE_PORT_BUNDLE=31300
 
 SPIFFE_HELM_CHART_VERSION="0.17.2"
 SPIFFE_CRDS_HELM_CHART_VERSION="0.3.0"
@@ -98,6 +97,11 @@ $(spire_helm_federated_spiffe_ids "${remote_clusters}")
 $(spire_helm_federated_trust_domains "${remote_clusters}")
 
 spire-agent:
+  sds:
+    enabled: true
+    defaultAllBundlesName: ROOTCA
+    defaultBundleName: "null"
+    defaultSvidName: default
   socketPath: /run/spire/agent-sockets/spire-agent.sock
 
 spiffe-csi-driver:
@@ -176,7 +180,7 @@ spire_server_federation_endpoint() { (
 
 spire_server_federation_endpoint_port() { (
   cluster="${1}"
-  docker port "$(spire_kind_node_name "${cluster}")" | grep "${SPIRE_SERVER_BASE_PORT_FEDERATION}" |
+  docker port "$(spire_kind_node_name "${cluster}")" | grep "${SPIRE_SERVER_BASE_PORT_BUNDLE}" |
     sed -e "s#^\(.*\)0.0.0.0:\([0-9]*\)#\2#"
 ); }
 
@@ -204,12 +208,8 @@ spec:
     app.kubernetes.io/instance: spire
     app.kubernetes.io/name: server
   ports:
-    - name: grpc
-      nodePort: $(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_GRPC}")
-      port: 8081
-      targetPort: grpc
     - name: federation
-      nodePort: $(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_FEDERATION}")
+      nodePort: $(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_BUNDLE}")
       port: 8443
       targetPort: federation
 EOF

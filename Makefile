@@ -32,4 +32,5 @@ install-istio:
 # Clean up
 .PHONY: clean
 clean: cleanup-test-clusters
+	rm -rf $(BIN_DIR)/*
 	rm -rf $(OUTPUT_DIR)/*
