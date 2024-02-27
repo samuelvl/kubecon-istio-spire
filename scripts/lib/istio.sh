@@ -8,7 +8,7 @@ export ISTIO_GW_BASE_PORT_HTTPS=31443
 
 BIN_DIR=${BIN_DIR:-.}
 ISTIO_CLI="${BIN_DIR}/istioctl"
-ISTIO_VERSION="1.20.2"
+ISTIO_VERSION="1.20.3"
 ISTIO_NAMESPACE="istio-system"
 ISTIO_GW_NAMESPACE="istio-gateways"
 ISTIO_APPS_NAMESPACE="istio-apps"
@@ -100,8 +100,8 @@ spec:
   profile: minimal
   meshConfig:
     trustDomain: $(spire_trust_domain "${cluster}")
-    caCertificates:
-$(istio_mesh_config_spire_bundle "${spire_clusters}")
+    trustDomainAliases:
+$(istio_mesh_config_spire_domains "${spire_clusters}" | sed 's/^/      /')
     defaultConfig:
       proxyMetadata:
         PROXY_CONFIG_XDS_AGENT: "true"
@@ -178,17 +178,10 @@ $(istio_mesh_config_spire_bundle "${spire_clusters}")
 EOF
 ); }
 
-istio_mesh_config_spire_bundle() { (
-  remote_clusters="${1}"
-  for remote_cluster in ${remote_clusters}; do
-    remote_context=$(spire_context_name "${remote_cluster}")
-    remote_cluster_domain=$(spire_trust_domain "${remote_cluster}")
-    cat <<EOF
-      - trustDomains:
-          - ${remote_cluster_domain}
-        pem: |
-$(spire_get_bundle_pem "${remote_context}" | sed 's/^/          /')
-EOF
+istio_mesh_config_spire_domains() { (
+  spire_clusters="${1}"
+  for spire_cluster in ${spire_clusters}; do
+    echo "- $(spire_trust_domain "${spire_cluster}")"
   done
 ); }
 
