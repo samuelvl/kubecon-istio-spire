@@ -20,7 +20,7 @@ ISTIO_ROOT_CA_KEY="${ISTIO_CERTS_DIR}/root-key.pem"
 ISTIO_CA_CHAIN="${ISTIO_CERTS_DIR}/cert-chain.pem"
 ISTIO_OPENSSL_CONFIG="${ISTIO_CERTS_DIR}/openssl.cnf"
 
-istio_install_cli() {
+istio_install_cli() { (
   if [ -f "${ISTIO_CLI}" ]; then
     echo "${ISTIO_CLI} already exists"
     return
@@ -39,9 +39,9 @@ istio_install_cli() {
   curl -L -s \
     "https://github.com/istio/istio/releases/download/${ISTIO_VERSION}/istioctl-${ISTIO_VERSION}-${ARCH}.tar.gz" | tar -xvz -C "${BIN_DIR}"
   chmod +x "${ISTIO_CLI}"
-}
+); }
 
-istio_install() {
+istio_install() { (
   clusters_contexts="${1}"
 
   istio_install_cli
@@ -62,14 +62,14 @@ istio_install() {
 
     echo "Installing Istio apps in ${context} cluster"
     helloworld_version="v$((cluster_counter + 1))"
-    istio_deploy_app_helloworld "${context}" ${ISTIO_APPS_NAMESPACE} ${helloworld_version}
-    istio_deploy_app_sleep "${context}" ${ISTIO_APPS_NAMESPACE}
+    istio_deploy_app_helloworld "${context}" "${ISTIO_APPS_NAMESPACE}" "${helloworld_version}"
+    istio_deploy_app_sleep "${context}" "${ISTIO_APPS_NAMESPACE}"
 
     cluster_counter=$((cluster_counter + 1))
   done
-}
+); }
 
-istio_install_multicluster() {
+istio_install_multicluster() { (
   clusters_contexts="${1}"
 
   istio_install "${clusters_contexts}"
@@ -82,15 +82,15 @@ istio_install_multicluster() {
       fi
     done
   done
-}
+); }
 
-istio_install_control_plane() {
+istio_install_control_plane() { (
   context="${1}"
   spire_clusters="${2}"
   cluster=$(istio_cluster_name "${context}")
 
   # Install Istio control plane
-  cat <<EOF | ${ISTIO_CLI} install --context "${context}" -y --verify -f -
+  cat <<EOF | tee /dev/tty | ${ISTIO_CLI} install --context "${context}" -y --verify -f -
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
 metadata:
@@ -101,10 +101,21 @@ spec:
   meshConfig:
     trustDomain: $(spire_trust_domain "${cluster}")
     caCertificates:
-$(istio_mesh_config_spiffe_bundle_endpoints "${spire_clusters}")
+$(istio_mesh_config_spire_bundle "${spire_clusters}")
+    defaultConfig:
+      proxyMetadata:
+        PROXY_CONFIG_XDS_AGENT: "true"
     accessLogFile: /dev/stdout
     outboundTrafficPolicy:
       mode: ALLOW_ANY
+  components:
+    pilot:
+      k8s:
+        env:
+          - name: ISTIO_MULTIROOT_MESH
+            value: "true"
+          - name: AUTO_RELOAD_PLUGIN_CERTS
+            value: "true"
   values:
     global:
       defaultPodDisruptionBudget:
@@ -165,27 +176,29 @@ $(istio_mesh_config_spiffe_bundle_endpoints "${spire_clusters}")
                   done
                   ls -l \${CHECK_FILE}
 EOF
-}
+); }
 
-istio_mesh_config_spiffe_bundle_endpoints() {
+istio_mesh_config_spire_bundle() { (
   remote_clusters="${1}"
   for remote_cluster in ${remote_clusters}; do
+    remote_context=$(spire_context_name "${remote_cluster}")
     remote_cluster_domain=$(spire_trust_domain "${remote_cluster}")
     cat <<EOF
       - trustDomains:
           - ${remote_cluster_domain}
-        spiffeBundleUrl: https://$(spire_server_federation_endpoint "${remote_cluster}")
+        pem: |
+$(spire_get_bundle_pem "${remote_context}" | sed 's/^/          /')
 EOF
   done
-}
+); }
 
-istio_install_ns_gateway() {
+istio_install_ns_gateway() { (
   context="${1}"
   cluster_counter="${2}"
   cluster=$(istio_cluster_name "${context}")
 
   kubectl create --context="${context}" namespace "${ISTIO_GW_NAMESPACE}" || true
-  cat <<EOF | ${ISTIO_CLI} install --context "${context}" -y -f -
+  cat <<EOF | tee /dev/tty | ${ISTIO_CLI} install --context "${context}" --force -y -f -
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
 metadata:
@@ -244,9 +257,9 @@ spec:
         autoscaleEnabled: false
         injectionTemplate: gateway,spire-gw
 EOF
-}
+); }
 
-istio_deploy_app_helloworld() {
+istio_deploy_app_helloworld() { (
   context="${1}"
   namespace="${2}"
   version="${3}" # v1 or v2
@@ -274,9 +287,9 @@ spec:
 EOF
 
   kubectl --context="${context}" -n "${namespace}" rollout status "deploy/helloworld-${version}"
-}
+); }
 
-istio_deploy_app_sleep() {
+istio_deploy_app_sleep() { (
   context="${1}"
   namespace="${2}"
 
@@ -286,22 +299,22 @@ istio_deploy_app_sleep() {
   # Deploy Sleep app
   kubectl apply --context="${context}" -n "${namespace}" -f scripts/manifests/istio/sleep.yaml
   kubectl --context="${context}" -n "${namespace}" rollout status deploy/sleep
-}
+); }
 
-istio_cluster_name() {
+istio_cluster_name() { (
   context="${1}"
   echo "${context}" | sed -e "s/^kind-//"
-}
+); }
 
-istio_unique_port() {
+istio_unique_port() { (
   index="${1}"
   base_port="${2}"
 
   PORT_OFFSET=1000
   echo $((base_port + index * PORT_OFFSET))
-}
+); }
 
-istio_api_server() {
+istio_api_server() { (
   context="${1}"
 
   # Adjust the context name to match the container naming convention
@@ -312,9 +325,9 @@ istio_api_server() {
 
   # Construct the API server address using the container IP and the standard API server port (6443)
   echo "https://${istio_api_server_ip}:6443"
-}
+); }
 
-istio_enable_endpoint_discovery() {
+istio_enable_endpoint_discovery() { (
   context="${1}"
   remote_context="${2}"
   remote_api_server="$(istio_api_server "${remote_context}")"
@@ -325,9 +338,9 @@ istio_enable_endpoint_discovery() {
     --server="${remote_api_server}" \
     --namespace="${ISTIO_NAMESPACE}" |
     kubectl apply -f - --context="${context}"
-}
+); }
 
-istio_generate_root_ca() {
+istio_generate_root_ca() { (
   # Create the certs directory
   mkdir -p "${ISTIO_CERTS_DIR}"
 
@@ -373,9 +386,9 @@ EOF
     -config "${ISTIO_OPENSSL_CONFIG}"
 
   cat "${ISTIO_ROOT_CA_CERT}" >"${ISTIO_CA_CHAIN}"
-}
+); }
 
-istio_generate_cluster_certificate() {
+istio_generate_cluster_certificate() { (
   context="${1}"
 
   # Define directory for the cluster's certificates within ISTIO_CERTS_DIR
@@ -424,4 +437,4 @@ istio_generate_cluster_certificate() {
     --from-file=root-cert.pem="${ISTIO_ROOT_CA_CERT}" \
     --from-file=cert-chain.pem="${cluster_ca_chain}" \
     --dry-run=client -o yaml | kubectl --context="${context}" apply -f -
-}
+); }

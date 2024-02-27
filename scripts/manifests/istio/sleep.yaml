@@ -42,7 +42,7 @@ spec:
       serviceAccountName: sleep
       containers:
         - name: sleep
-          image: curlimages/curl
+          image: registry.access.redhat.com/ubi8/ubi:8.9-1136
           command: ["/bin/sleep", "infinity"]
           imagePullPolicy: IfNotPresent
           volumeMounts:

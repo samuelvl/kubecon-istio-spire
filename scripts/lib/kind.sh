@@ -43,7 +43,7 @@ kind_create_clusters() {
       continue
     fi
 
-    cat <<EOF | ${KIND_CLI} create cluster --name "${cluster}" --config=-
+    cat <<EOF | tee /dev/tty | ${KIND_CLI} create cluster --name "${cluster}" --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 networking:
