@@ -77,6 +77,8 @@ spire-server:
     organization: KubeCon
   federation:
     enabled: true
+  service:
+    type: NodePort
   controllerManager:
     identities:
       clusterSPIFFEIDs:
@@ -200,7 +202,14 @@ spire_server_create_svc() { (
 apiVersion: v1
 kind: Service
 metadata:
-  name: spire-server-nodeport
+  name: spire-server
+  annotations:
+    meta.helm.sh/release-name: spire
+    meta.helm.sh/release-namespace: spire-system
+  labels:
+    app.kubernetes.io/instance: spire
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: server
 spec:
   type: NodePort
   internalTrafficPolicy: Cluster
