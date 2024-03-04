@@ -21,6 +21,8 @@ ISTIO_ROOT_CA_CERT="${ISTIO_CERTS_DIR}/root-cert.pem"
 ISTIO_ROOT_CA_KEY="${ISTIO_CERTS_DIR}/root-key.pem"
 ISTIO_CA_CHAIN="${ISTIO_CERTS_DIR}/cert-chain.pem"
 ISTIO_OPENSSL_CONFIG="${ISTIO_CERTS_DIR}/openssl.cnf"
+ISTIO_PRODUCTPAGE_APP_DIR=scripts/manifests/istio/productpage
+ISTIO_PRODUCTPAGE_APP_NAMESPACE=bookinfo
 
 istio_install_cli() { (
   if [ -f "${ISTIO_CLI}" ]; then
@@ -61,12 +63,18 @@ istio_install() { (
     echo "Installing Istio in ${context} cluster"
     spire_clusters=$(kind_utils_remote_clusters "${context}" "${clusters_contexts}")
     istio_install_control_plane "${context}" "${spire_clusters}"
-    istio_install_ns_gateway "${context}" "${cluster_counter}"
+
+    if [ "${cluster_counter}" -eq 0 ]; then
+      istio_install_ns_gateway "${cluster_counter}" "${context}"
+    fi
 
     echo "Installing Istio apps in ${context} cluster"
     helloworld_version="v$((cluster_counter + 1))"
     istio_deploy_app_helloworld "${context}" "${ISTIO_APPS_NAMESPACE}" "${helloworld_version}"
     istio_deploy_app_sleep "${context}" "${ISTIO_APPS_NAMESPACE}"
+    istio_deploy_app_productpage_frontend "${context}" "${cluster_counter}" "${ISTIO_PRODUCTPAGE_APP_NAMESPACE}"
+    istio_deploy_app_productpage_backend "${context}" "${cluster_counter}" "${ISTIO_PRODUCTPAGE_APP_NAMESPACE}"
+    istio_deploy_routing "${context}" "${cluster_counter}" "${ISTIO_PRODUCTPAGE_APP_NAMESPACE}"
 
     if [ "${observability}" = "true" ]; then
       echo "Installing Prometheus in ${context} cluster"
@@ -308,6 +316,59 @@ istio_deploy_app_sleep() { (
   # Deploy Sleep app
   kubectl apply --context="${context}" -n "${namespace}" -f scripts/manifests/istio/sleep.yaml
   kubectl --context="${context}" -n "${namespace}" rollout status deploy/sleep
+); }
+
+istio_deploy_app_productpage_frontend() { (
+  context="${1}"
+  cluster_counter="${2}"
+  namespace="${3}"
+
+  # Create namespace and label it for Istio sidecar injection
+  kubectl create --context="${context}" namespace "${namespace}" || true
+
+  # Deploy Productpage MicroServices
+  if [ "${cluster_counter}" -eq 0 ]; then
+    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/productpage.yaml
+    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/reviews-v3.yaml
+    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/ratings.yaml
+    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/details.yaml
+    kubectl --context="${context}" -n "${namespace}" rollout status deploy/productpage-v1
+    kubectl --context="${context}" -n "${namespace}" rollout status deploy/reviews-v3
+    kubectl --context="${context}" -n "${namespace}" rollout status deploy/ratings-v1
+    kubectl --context="${context}" -n "${namespace}" rollout status deploy/details-v1
+  fi
+
+); }
+
+istio_deploy_app_productpage_backend() { (
+  context="${1}"
+  cluster_counter="${2}"
+  namespace="${3}"
+
+  # Create namespace and label it for Istio sidecar injection
+  kubectl create --context="${context}" namespace "${namespace}" || true
+
+  # Deploy Productage MicroServices
+  if [ "${cluster_counter}" -ne 0 ]; then
+    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/reviews-v1-v2.yaml
+    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/details.yaml
+    kubectl --context="${context}" -n "${namespace}" rollout status deploy/reviews-v1
+    kubectl --context="${context}" -n "${namespace}" rollout status deploy/reviews-v2
+    kubectl --context="${context}" -n "${namespace}" rollout status deploy/details-v1
+  fi
+
+); }
+
+istio_deploy_routing() { (
+  context="${1}"
+  cluster_counter="${2}"
+  namespace="${3}"
+
+  # Deploy Istio Routing
+  if [ "${cluster_counter}" -eq 0 ]; then
+    kubectl apply --context="${context}" -n "${namespace}" -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/bookinfo/networking/bookinfo-gateway.yaml
+  fi
+
 ); }
 
 istio_api_server() { (
