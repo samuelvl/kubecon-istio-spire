@@ -2,6 +2,7 @@
 set -u -o errexit -x
 
 . "./scripts/lib/spire.sh"
+. "./scripts/lib/istio_observability.sh"
 
 export ISTIO_GW_BASE_PORT_HTTP=31080
 export ISTIO_GW_BASE_PORT_HTTPS=31443
@@ -67,10 +68,12 @@ istio_install() { (
 
     cluster_counter=$((cluster_counter + 1))
   done
+
 ); }
 
 istio_install_multicluster() { (
   clusters_contexts="${1}"
+  observability="${2}"
 
   istio_install "${clusters_contexts}"
 
@@ -82,6 +85,11 @@ istio_install_multicluster() { (
       fi
     done
   done
+
+  if [ "${observability}" = "true" ]; then
+    istio_observability_deploy_stack "${clusters_contexts}"
+  fi
+
 ); }
 
 istio_install_control_plane() { (

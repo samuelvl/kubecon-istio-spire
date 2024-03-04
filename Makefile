@@ -27,13 +27,7 @@ install-spire:
 .PHONY: install-istio
 install-istio:
 	BIN_DIR=$(BIN_DIR) . ./scripts/lib/istio.sh; \
-	istio_install_multicluster "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2";
-
-# Deploy Monitoring
-.PHONY: deploy-observability
-deploy-observability:
-	BIN_DIR=$(BIN_DIR) . ./scripts/lib/observability.sh; \
-	deploy_observability_stack "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2";
+	istio_install_multicluster "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2" "true";
 
 # Clean up
 .PHONY: clean
