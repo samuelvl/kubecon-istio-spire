@@ -2,6 +2,8 @@
 set -u -o errexit -x
 
 . "./scripts/lib/spire.sh"
+. "./scripts/lib/istio-observability.sh"
+. "./scripts/lib/kind-utils.sh"
 
 export ISTIO_GW_BASE_PORT_HTTP=31080
 export ISTIO_GW_BASE_PORT_HTTPS=31443
@@ -43,6 +45,7 @@ istio_install_cli() { (
 
 istio_install() { (
   clusters_contexts="${1}"
+  observability="${2}"
 
   istio_install_cli
   istio_generate_root_ca
@@ -56,7 +59,7 @@ istio_install() { (
     istio_generate_cluster_certificate "${context}"
 
     echo "Installing Istio in ${context} cluster"
-    spire_clusters=$(spire_remote_clusters "${context}" "${clusters_contexts}")
+    spire_clusters=$(kind_utils_remote_clusters "${context}" "${clusters_contexts}")
     istio_install_control_plane "${context}" "${spire_clusters}"
     istio_install_ns_gateway "${context}" "${cluster_counter}"
 
@@ -65,29 +68,42 @@ istio_install() { (
     istio_deploy_app_helloworld "${context}" "${ISTIO_APPS_NAMESPACE}" "${helloworld_version}"
     istio_deploy_app_sleep "${context}" "${ISTIO_APPS_NAMESPACE}"
 
+    if [ "${observability}" = "true" ]; then
+      echo "Installing Prometheus in ${context} cluster"
+      istio_observability_prometheus_install "${context}" "${ISTIO_OBSERVABILITY_NAMESPACE}"
+    fi
+
     cluster_counter=$((cluster_counter + 1))
   done
 ); }
 
 istio_install_multicluster() { (
   clusters_contexts="${1}"
+  observability="${2}"
 
-  istio_install "${clusters_contexts}"
+  istio_install "${clusters_contexts}" "${observability}"
 
-  for current_context in ${clusters_contexts}; do
-    for remote_context in ${clusters_contexts}; do
-      if [ "${current_context}" != "${remote_context}" ]; then
-        echo "Creating remote secret from ${current_context} and applying it to ${remote_context}"
-        istio_enable_endpoint_discovery "${current_context}" "${remote_context}"
-      fi
-    done
+  cluster_counter=0
+  for context in ${clusters_contexts}; do
+    remote_clusters=$(kind_utils_remote_clusters "${context}" "${clusters_contexts}")
+
+    # Enable multi-cluster discovery
+    istio_enable_endpoint_discovery "${context}" "${remote_clusters}"
+
+    # Deploy Thanos and Kiali only on the first cluster
+    if [ "${observability}" = "true" ] && [ "${cluster_counter}" = "0" ]; then
+      istio_observability_thanos_install "${context}" "${ISTIO_OBSERVABILITY_NAMESPACE}" "${remote_clusters}"
+      istio_observability_kiali_install "${context}" "${cluster_counter}" "${ISTIO_OBSERVABILITY_NAMESPACE}"
+    fi
+
+    cluster_counter=$((cluster_counter + 1))
   done
 ); }
 
 istio_install_control_plane() { (
   context="${1}"
   spire_clusters="${2}"
-  cluster=$(istio_cluster_name "${context}")
+  cluster=$(kind_utils_cluster_name "${context}")
 
   # Install Istio control plane
   cat <<EOF | tee /dev/tty | ${ISTIO_CLI} install --context "${context}" -y --verify -f -
@@ -99,7 +115,7 @@ metadata:
 spec:
   profile: minimal
   meshConfig:
-    trustDomain: $(spire_trust_domain "${cluster}")
+    trustDomain: $(kind_utils_trust_domain "${cluster}")
     trustDomainAliases:
 $(istio_mesh_config_spire_domains "${spire_clusters}" | sed 's/^/      /')
     defaultConfig:
@@ -181,14 +197,14 @@ EOF
 istio_mesh_config_spire_domains() { (
   spire_clusters="${1}"
   for spire_cluster in ${spire_clusters}; do
-    echo "- $(spire_trust_domain "${spire_cluster}")"
+    echo "- $(kind_utils_trust_domain "${spire_cluster}")"
   done
 ); }
 
 istio_install_ns_gateway() { (
   context="${1}"
   cluster_counter="${2}"
-  cluster=$(istio_cluster_name "${context}")
+  cluster=$(kind_utils_cluster_name "${context}")
 
   kubectl create --context="${context}" namespace "${ISTIO_GW_NAMESPACE}" || true
   cat <<EOF | tee /dev/tty | ${ISTIO_CLI} install --context "${context}" --force -y -f -
@@ -200,7 +216,7 @@ metadata:
 spec:
   profile: empty
   meshConfig:
-    trustDomain: $(spire_trust_domain "${cluster}")
+    trustDomain: $(kind_utils_trust_domain "${cluster}")
     accessLogFile: /dev/stdout
   components:
     ingressGateways:
@@ -225,11 +241,11 @@ spec:
               - name: http2
                 port: 80
                 targetPort: 8080
-                nodePort: $(istio_unique_port "${cluster_counter}" "${ISTIO_GW_BASE_PORT_HTTP}")
+                nodePort: $(kind_utils_unique_port "${cluster_counter}" "${ISTIO_GW_BASE_PORT_HTTP}")
               - name: https
                 port: 443
                 targetPort: 8443
-                nodePort: $(istio_unique_port "${cluster_counter}" "${ISTIO_GW_BASE_PORT_HTTPS}")
+                nodePort: $(kind_utils_unique_port "${cluster_counter}" "${ISTIO_GW_BASE_PORT_HTTPS}")
           overlays:
             - apiVersion: apps/v1
               kind: Deployment
@@ -294,19 +310,6 @@ istio_deploy_app_sleep() { (
   kubectl --context="${context}" -n "${namespace}" rollout status deploy/sleep
 ); }
 
-istio_cluster_name() { (
-  context="${1}"
-  echo "${context}" | sed -e "s/^kind-//"
-); }
-
-istio_unique_port() { (
-  index="${1}"
-  base_port="${2}"
-
-  PORT_OFFSET=1000
-  echo $((base_port + index * PORT_OFFSET))
-); }
-
 istio_api_server() { (
   context="${1}"
 
@@ -322,15 +325,19 @@ istio_api_server() { (
 
 istio_enable_endpoint_discovery() { (
   context="${1}"
-  remote_context="${2}"
-  remote_api_server="$(istio_api_server "${remote_context}")"
+  remote_clusters="${2}"
 
-  ${ISTIO_CLI} create-remote-secret \
-    --context="${remote_context}" \
-    --name="${remote_context}" \
-    --server="${remote_api_server}" \
-    --namespace="${ISTIO_NAMESPACE}" |
-    kubectl apply -f - --context="${context}"
+  for remote_cluster in ${remote_clusters}; do
+    remote_context=$(kind_utils_context_name "${remote_cluster}")
+    remote_api_server="$(istio_api_server "${remote_context}")"
+
+    ${ISTIO_CLI} create-remote-secret \
+      --context="${remote_context}" \
+      --name="${remote_context}" \
+      --server="${remote_api_server}" \
+      --namespace="${ISTIO_NAMESPACE}" |
+      kubectl apply -f - --context="${context}"
+  done
 ); }
 
 istio_generate_root_ca() { (

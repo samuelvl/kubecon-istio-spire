@@ -2,6 +2,7 @@
 set -u -o errexit -x
 
 . "./scripts/lib/helm.sh"
+. "./scripts/lib/kind-utils.sh"
 
 export SPIRE_SERVER_BASE_PORT_BUNDLE=31300
 
@@ -15,13 +16,13 @@ spire_install() { (
 
   cluster_counter=0
   for context in ${clusters_contexts}; do
-    remote_clusters=$(spire_remote_clusters "${context}" "${clusters_contexts}")
+    remote_clusters=$(kind_utils_remote_clusters "${context}" "${clusters_contexts}")
     spire_helm_install "${context}" "${cluster_counter}" "${remote_clusters}"
     cluster_counter=$((cluster_counter + 1))
   done
 
   for context in ${clusters_contexts}; do
-    remote_clusters=$(spire_remote_clusters "${context}" "${clusters_contexts}")
+    remote_clusters=$(kind_utils_remote_clusters "${context}" "${clusters_contexts}")
     spire_inject_bundle "${context}" "${remote_clusters}"
   done
 ); }
@@ -30,7 +31,7 @@ spire_helm_install() { (
   context="${1}"
   cluster_counter="${2}"
   remote_clusters="${3}"
-  cluster=$(spire_cluster_name "${context}")
+  cluster=$(kind_utils_cluster_name "${context}")
 
   ${HELM_CLI} repo add spiffe "https://spiffe.github.io/helm-charts-hardened" --force-update
   ${HELM_CLI} repo update spiffe
@@ -66,7 +67,7 @@ spire_helm_values() { (
 global:
   spire:
     clusterName: ${cluster}
-    trustDomain: $(spire_trust_domain "${cluster}")
+    trustDomain: $(kind_utils_trust_domain "${cluster}")
     bundleConfigMap: spire-bundle-${cluster}
     ingressControllerType: other
 
@@ -117,7 +118,7 @@ EOF
 spire_helm_federated_spiffe_ids() { (
   remote_clusters="${1}"
   for remote_cluster in ${remote_clusters}; do
-    remote_cluster_domain=$(spire_trust_domain "${remote_cluster}")
+    remote_cluster_domain=$(kind_utils_trust_domain "${remote_cluster}")
     cat <<EOF
             - ${remote_cluster_domain}
 EOF
@@ -127,7 +128,7 @@ EOF
 spire_helm_federated_trust_domains() { (
   remote_clusters="${1}"
   for remote_cluster in ${remote_clusters}; do
-    remote_cluster_domain=$(spire_trust_domain "${remote_cluster}")
+    remote_cluster_domain=$(kind_utils_trust_domain "${remote_cluster}")
     cat <<EOF
         ${remote_cluster}:
           bundleEndpointURL: https://$(spire_server_federation_endpoint "${remote_cluster}")
@@ -139,57 +140,17 @@ EOF
   done
 ); }
 
-spire_remote_clusters() { (
-  context="${1}"
-  remote_contexts="${2}"
-  remote_clusters=""
-  for remote_context in ${remote_contexts}; do
-    if [ "${remote_context}" != "${context}" ]; then
-      remote_clusters="${remote_clusters} $(spire_cluster_name "${remote_context}")"
-    fi
-  done
-  echo "${remote_clusters}" | xargs
-); }
-
-spire_cluster_name() { (
-  context="${1}"
-  echo "${context}" | sed -e "s/^kind-//"
-); }
-
-spire_context_name() { (
-  cluster="${1}"
-  echo "kind-${cluster}"
-); }
-
-spire_kind_node_name() { (
-  cluster="${1}"
-  echo "${cluster}-control-plane"
-); }
-
-spire_trust_domain() { (
-  cluster="${1}"
-  echo "${cluster}.local"
-); }
-
 spire_server_federation_endpoint() { (
   cluster="${1}"
-  federation_endpoint_addr="$(spire_kind_node_name "${cluster}").kind"
+  federation_endpoint_addr="$(kind_utils_node_host "${cluster}")"
   federation_endpoint_port=$(spire_server_federation_endpoint_port "${cluster}")
   echo "${federation_endpoint_addr}:${federation_endpoint_port}"
 ); }
 
 spire_server_federation_endpoint_port() { (
   cluster="${1}"
-  docker port "$(spire_kind_node_name "${cluster}")" | grep "${SPIRE_SERVER_BASE_PORT_BUNDLE}" |
+  docker port "$(kind_utils_node_name "${cluster}")" | grep "${SPIRE_SERVER_BASE_PORT_BUNDLE}" |
     sed -e "s#^\(.*\)0.0.0.0:\([0-9]*\)#\2#"
-); }
-
-spire_unique_port() { (
-  cluster_counter="${1}"
-  base_port="${2}"
-
-  PORT_OFFSET=1000
-  echo $((base_port + cluster_counter * PORT_OFFSET))
 ); }
 
 spire_server_create_svc() { (
@@ -209,7 +170,7 @@ spec:
     app.kubernetes.io/name: server
   ports:
     - name: federation
-      nodePort: $(spire_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_BUNDLE}")
+      nodePort: $(kind_utils_unique_port "${cluster_counter}" "${SPIRE_SERVER_BASE_PORT_BUNDLE}")
       port: 8443
       targetPort: federation
 EOF
@@ -232,8 +193,8 @@ spire_inject_bundle() { (
   remote_clusters="${2}"
 
   for remote_cluster in ${remote_clusters}; do
-    remote_context=$(spire_context_name "${remote_cluster}")
+    remote_context=$(kind_utils_context_name "${remote_cluster}")
     spire_server_exec "${remote_context}" "bundle show -format spiffe" |
-      spire_server_exec "${context}" "bundle set -format spiffe -id spiffe://$(spire_trust_domain "${remote_cluster}")"
+      spire_server_exec "${context}" "bundle set -format spiffe -id spiffe://$(kind_utils_trust_domain "${remote_cluster}")"
   done
 ); }
