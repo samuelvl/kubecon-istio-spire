@@ -2,6 +2,7 @@
 set -u -o errexit -x
 
 . "./scripts/lib/spire.sh"
+. "./scripts/lib/istio-apps.sh"
 . "./scripts/lib/istio-observability.sh"
 . "./scripts/lib/kind-utils.sh"
 
@@ -13,7 +14,6 @@ ISTIO_CLI="${BIN_DIR}/istioctl"
 ISTIO_VERSION="1.20.3"
 ISTIO_NAMESPACE="istio-system"
 ISTIO_GW_NAMESPACE="istio-gateways"
-ISTIO_APPS_NAMESPACE="istio-apps"
 ISTIO_MESHID="mesh1"
 ISTIO_NETWORK="network1"
 ISTIO_CERTS_DIR="_output/certs"
@@ -21,8 +21,6 @@ ISTIO_ROOT_CA_CERT="${ISTIO_CERTS_DIR}/root-cert.pem"
 ISTIO_ROOT_CA_KEY="${ISTIO_CERTS_DIR}/root-key.pem"
 ISTIO_CA_CHAIN="${ISTIO_CERTS_DIR}/cert-chain.pem"
 ISTIO_OPENSSL_CONFIG="${ISTIO_CERTS_DIR}/openssl.cnf"
-ISTIO_PRODUCTPAGE_APP_DIR=scripts/manifests/istio/productpage
-ISTIO_PRODUCTPAGE_APP_NAMESPACE=bookinfo
 
 istio_install_cli() { (
   if [ -f "${ISTIO_CLI}" ]; then
@@ -64,22 +62,18 @@ istio_install() { (
     spire_clusters=$(kind_utils_remote_clusters "${context}" "${clusters_contexts}")
     istio_install_control_plane "${context}" "${spire_clusters}"
 
-    if [ "${cluster_counter}" -eq 0 ]; then
-      istio_install_ns_gateway "${cluster_counter}" "${context}"
+    # Install the Istio N/S gateway in the first cluster only
+    if [ "${cluster_counter}" = "0" ]; then
+      istio_install_ns_gateway "${context}" "${cluster_counter}"
     fi
-
-    echo "Installing Istio apps in ${context} cluster"
-    helloworld_version="v$((cluster_counter + 1))"
-    istio_deploy_app_helloworld "${context}" "${ISTIO_APPS_NAMESPACE}" "${helloworld_version}"
-    istio_deploy_app_sleep "${context}" "${ISTIO_APPS_NAMESPACE}"
-    istio_deploy_app_productpage_frontend "${context}" "${cluster_counter}" "${ISTIO_PRODUCTPAGE_APP_NAMESPACE}"
-    istio_deploy_app_productpage_backend "${context}" "${cluster_counter}" "${ISTIO_PRODUCTPAGE_APP_NAMESPACE}"
-    istio_deploy_routing "${context}" "${cluster_counter}" "${ISTIO_PRODUCTPAGE_APP_NAMESPACE}"
 
     if [ "${observability}" = "true" ]; then
       echo "Installing Prometheus in ${context} cluster"
       istio_observability_prometheus_install "${context}" "${ISTIO_OBSERVABILITY_NAMESPACE}"
     fi
+
+    echo "Installing Istio apps in ${context} cluster"
+    istio_apps_bookinfo "${context}" "${cluster_counter}"
 
     cluster_counter=$((cluster_counter + 1))
   done
@@ -274,101 +268,6 @@ spec:
         autoscaleEnabled: false
         injectionTemplate: gateway,spire-gw
 EOF
-); }
-
-istio_deploy_app_helloworld() { (
-  context="${1}"
-  namespace="${2}"
-  version="${3}" # v1 or v2
-
-  # Create namespace and label it for Istio sidecar injection
-  kubectl create --context="${context}" namespace "${namespace}" || true
-
-  # Deploy Helloworld app
-  kubectl apply --context="${context}" -n "${namespace}" \
-    -l app=helloworld -l version="${version}" -f scripts/manifests/istio/helloworld.yaml
-
-  # Apply the HelloWorld service YAML
-  kubectl apply --context="${context}" -n "${namespace}" -f - <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: helloworld
-  namespace: ${namespace}
-spec:
-  ports:
-  - name: http
-    port: 5000
-  selector:
-    app: helloworld
-EOF
-
-  kubectl --context="${context}" -n "${namespace}" rollout status "deploy/helloworld-${version}"
-); }
-
-istio_deploy_app_sleep() { (
-  context="${1}"
-  namespace="${2}"
-
-  # Create namespace and label it for Istio sidecar injection
-  kubectl create --context="${context}" namespace "${namespace}" || true
-
-  # Deploy Sleep app
-  kubectl apply --context="${context}" -n "${namespace}" -f scripts/manifests/istio/sleep.yaml
-  kubectl --context="${context}" -n "${namespace}" rollout status deploy/sleep
-); }
-
-istio_deploy_app_productpage_frontend() { (
-  context="${1}"
-  cluster_counter="${2}"
-  namespace="${3}"
-
-  # Create namespace and label it for Istio sidecar injection
-  kubectl create --context="${context}" namespace "${namespace}" || true
-
-  # Deploy Productpage MicroServices
-  if [ "${cluster_counter}" -eq 0 ]; then
-    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/productpage.yaml
-    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/reviews-v3.yaml
-    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/ratings.yaml
-    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/details.yaml
-    kubectl --context="${context}" -n "${namespace}" rollout status deploy/productpage-v1
-    kubectl --context="${context}" -n "${namespace}" rollout status deploy/reviews-v3
-    kubectl --context="${context}" -n "${namespace}" rollout status deploy/ratings-v1
-    kubectl --context="${context}" -n "${namespace}" rollout status deploy/details-v1
-  fi
-
-); }
-
-istio_deploy_app_productpage_backend() { (
-  context="${1}"
-  cluster_counter="${2}"
-  namespace="${3}"
-
-  # Create namespace and label it for Istio sidecar injection
-  kubectl create --context="${context}" namespace "${namespace}" || true
-
-  # Deploy Productage MicroServices
-  if [ "${cluster_counter}" -ne 0 ]; then
-    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/reviews-v1-v2.yaml
-    kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_PRODUCTPAGE_APP_DIR}/details.yaml
-    kubectl --context="${context}" -n "${namespace}" rollout status deploy/reviews-v1
-    kubectl --context="${context}" -n "${namespace}" rollout status deploy/reviews-v2
-    kubectl --context="${context}" -n "${namespace}" rollout status deploy/details-v1
-  fi
-
-); }
-
-istio_deploy_routing() { (
-  context="${1}"
-  cluster_counter="${2}"
-  namespace="${3}"
-
-  # Deploy Istio Routing
-  if [ "${cluster_counter}" -eq 0 ]; then
-    kubectl apply --context="${context}" -n "${namespace}" -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/bookinfo/networking/bookinfo-gateway.yaml
-  fi
-
 ); }
 
 istio_api_server() { (
