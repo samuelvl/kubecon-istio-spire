@@ -82,6 +82,7 @@ istio_install() { (
 istio_install_multicluster() { (
   clusters_contexts="${1}"
   observability="${2}"
+  all_clusters=$(kind_utils_all_clusters "${clusters_contexts}")
 
   istio_install "${clusters_contexts}" "${observability}"
 
@@ -94,7 +95,7 @@ istio_install_multicluster() { (
 
     # Deploy Thanos and Kiali only on the first cluster
     if [ "${observability}" = "true" ] && [ "${cluster_counter}" = "0" ]; then
-      istio_observability_thanos_install "${context}" "${ISTIO_OBSERVABILITY_NAMESPACE}" "${remote_clusters}"
+      istio_observability_thanos_install "${context}" "${ISTIO_OBSERVABILITY_NAMESPACE}" "${all_clusters}"
       istio_observability_kiali_install "${context}" "${cluster_counter}" "${ISTIO_OBSERVABILITY_NAMESPACE}"
     fi
 
