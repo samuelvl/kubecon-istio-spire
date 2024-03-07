@@ -26,6 +26,15 @@ kind_utils_trust_domain() { (
   echo "${cluster}.local"
 ); }
 
+kind_utils_all_clusters() { (
+  clusters_contexts="${1}"
+  clusters=""
+  for context in ${clusters_contexts}; do
+    clusters="${clusters} $(kind_utils_cluster_name "${context}")"
+  done
+  echo "${clusters}" | xargs
+); }
+
 kind_utils_remote_clusters() { (
   context="${1}"
   remote_contexts="${2}"

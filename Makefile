@@ -1,10 +1,11 @@
-ROOT_DIR          := $(shell pwd)
-OUTPUT_DIR        := $(ROOT_DIR)/_output
-BIN_DIR           := $(OUTPUT_DIR)/.bin
-CLUSTER_BASE_NAME := istio-cluster
+ROOT_DIR            := $(shell pwd)
+OUTPUT_DIR          := $(ROOT_DIR)/_output
+BIN_DIR             := $(OUTPUT_DIR)/.bin
+CLUSTER_BASE_NAME   := istio-cluster
+OBSERVABILITY_STACK := true
 
-.PHONY: install
-install: setup-test-clusters install-spire install-istio
+.PHONY: demo
+demo: setup-test-clusters install-spire install-istio
 
 # Kind clusters
 .PHONY: setup-test-clusters
@@ -27,7 +28,7 @@ install-spire:
 .PHONY: install-istio
 install-istio:
 	BIN_DIR=$(BIN_DIR) . ./scripts/lib/istio.sh; \
-	istio_install_multicluster "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2" "true";
+	istio_install_multicluster "kind-$(CLUSTER_BASE_NAME)-1 kind-$(CLUSTER_BASE_NAME)-2" "$(OBSERVABILITY_STACK)";
 
 # Clean up
 .PHONY: clean
