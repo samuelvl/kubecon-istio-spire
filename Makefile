@@ -4,8 +4,8 @@ BIN_DIR             := $(OUTPUT_DIR)/.bin
 CLUSTER_BASE_NAME   := istio-cluster
 OBSERVABILITY_STACK := true
 
-.PHONY: install
-install: setup-test-clusters install-spire install-istio
+.PHONY: demo
+demo: setup-test-clusters install-spire install-istio
 
 # Kind clusters
 .PHONY: setup-test-clusters
