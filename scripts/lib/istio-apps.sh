@@ -4,6 +4,7 @@ set -u -o errexit -x
 ISTIO_GW_NAMESPACE="istio-gateways"
 ISTIO_APPS_BOOKINFO_NAMESPACE="bookinfo"
 ISTIO_PRODUCTPAGE_APP_DIR="scripts/manifests/istio/productpage"
+ISTIO_SLEEP_APP_DIR="scripts/manifests/istio/"
 
 istio_apps_bookinfo() { (
   context="${1}"
@@ -13,8 +14,10 @@ istio_apps_bookinfo() { (
     istio_apps_productpage_frontend "${context}" "${ISTIO_APPS_BOOKINFO_NAMESPACE}"
     istio_deploy_routing "${context}" "${ISTIO_APPS_BOOKINFO_NAMESPACE}"
     istio_deploy_jwt_policy "${context}" "${ISTIO_GW_NAMESPACE}"
+    istio_apps_sleep "${context}" "${ISTIO_APPS_BOOKINFO_NAMESPACE}"
   else
     istio_apps_productpage_backend "${context}" "${ISTIO_APPS_BOOKINFO_NAMESPACE}"
+    istio_deploy_auth_policy "${context}" "${ISTIO_APPS_BOOKINFO_NAMESPACE}"
   fi
 ); }
 
@@ -46,6 +49,16 @@ istio_apps_productpage_backend() { (
   kubectl --context="${context}" -n "${namespace}" rollout status deploy/reviews-v2
   kubectl --context="${context}" -n "${namespace}" rollout status deploy/details-v1
   kubectl --context="${context}" -n "${namespace}" rollout status deploy/ratings-v1
+); }
+
+istio_apps_sleep() { (
+  context="${1}"
+  namespace="${2}"
+
+  kubectl apply --context="${context}" -n "${namespace}" -f ${ISTIO_SLEEP_APP_DIR}/sleep.yaml
+
+  kubectl --context="${context}" -n "${namespace}" rollout status deploy/sleep
+
 ); }
 
 istio_deploy_routing() { (
@@ -135,5 +148,34 @@ spec:
         - source:
             requestPrincipals:
               - testing@secure.istio.io/testing@secure.istio.io
+EOF
+); }
+
+istio_deploy_auth_policy() { (
+  context="${1}"
+  namespace="${2}"
+
+  kubectl apply --context="${context}" -n "${namespace}" -f - <<EOF
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-productpage
+  namespace: bookinfo
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals:
+        - istio-cluster-1.local/ns/bookinfo/sa/bookinfo-productpage
+    to:
+    - operation:
+        methods:
+        - GET
+        paths:
+        - /reviews/*
+  selector:
+    matchLabels:
+      app: reviews
 EOF
 ); }
